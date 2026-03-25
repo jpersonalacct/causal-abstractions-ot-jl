@@ -43,6 +43,8 @@ class CompareExperimentConfig:
     calibration_pair_size: int = DEFAULT_PAIR_TRAIN_SIZE
     test_pair_size: int = DEFAULT_PAIR_TEST_SIZE
     target_vars: tuple[str, ...] = DEFAULT_TARGET_VARS
+    pair_policy: str = "unfiltered"
+    pair_pool_size: int | None = None
     batch_size: int = 128
     resolution: int = DEFAULT_ALIGNMENT_RESOLUTION
     fgw_alpha: float = 0.5
@@ -83,6 +85,11 @@ def _build_summary_lines(
             f"train={config.train_pair_size}, "
             f"calibration={config.calibration_pair_size}, "
             f"test={config.test_pair_size}"
+        ),
+        (
+            "pair_construction: "
+            f"policy={config.pair_policy}, "
+            f"pool_size={config.pair_pool_size}"
         ),
         f"factual_validation_exact_acc: {float(factual_metrics.get('exact_acc', 0.0)):.4f}",
         "",
@@ -126,14 +133,33 @@ def run_comparison_with_model(
     config: CompareExperimentConfig,
 ) -> dict[str, object]:
     """Run the shared alignment evaluation starting from an in-memory model."""
-    train_bank = build_pair_bank(problem, config.train_pair_size, config.seed + 201, "train")
+    train_bank = build_pair_bank(
+        problem,
+        config.train_pair_size,
+        config.seed + 201,
+        "train",
+        target_vars=tuple(config.target_vars),
+        pair_policy=config.pair_policy,
+        pair_pool_size=config.pair_pool_size,
+    )
     calibration_bank = build_pair_bank(
         problem,
         config.calibration_pair_size,
         config.seed + 301,
         "calibration",
+        target_vars=tuple(config.target_vars),
+        pair_policy=config.pair_policy,
+        pair_pool_size=config.pair_pool_size,
     )
-    test_bank = build_pair_bank(problem, config.test_pair_size, config.seed + 401, "test")
+    test_bank = build_pair_bank(
+        problem,
+        config.test_pair_size,
+        config.seed + 401,
+        "test",
+        target_vars=tuple(config.target_vars),
+        pair_policy=config.pair_policy,
+        pair_pool_size=config.pair_pool_size,
+    )
 
     method_payloads: dict[str, dict[str, object]] = {}
     method_runtime_seconds: dict[str, float] = {}
@@ -203,6 +229,10 @@ def run_comparison_with_model(
         "methods": list(config.methods),
         "checkpoint_path": str(config.checkpoint_path),
         "target_vars": list(config.target_vars),
+        "pair_construction": {
+            "pair_policy": config.pair_policy,
+            "pair_pool_size": config.pair_pool_size,
+        },
         "backbone": backbone_meta,
         "banks": {
             "train": train_bank.metadata(),
