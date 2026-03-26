@@ -71,11 +71,16 @@ def build_method_selection_summary(method: str, payload: dict[str, object]) -> d
             "method": method,
             "transport_meta": dict(payload.get("transport_meta", {})),
             "selected_hyperparameters": dict(payload.get("selected_hyperparameters", {})),
+            "selection_objective": payload.get("selection_objective"),
+            "final_evaluation_policy": payload.get("final_evaluation_policy"),
             "results": [
                 {
                     "variable": record["variable"],
                     "site_label": record["site_label"],
                     "top_site_label": record.get("top_site_label"),
+                    "selected_layer": record.get("selected_layer"),
+                    "continuous_cutoff": record.get("continuous_cutoff"),
+                    "selection_cross_entropy": record.get("selection_cross_entropy"),
                     "top_k": record.get("top_k"),
                     "lambda": record.get("lambda"),
                     "calibration_exact_acc": record.get("calibration_exact_acc", 0.0),
@@ -118,20 +123,36 @@ def format_method_selection_summary(summary: dict[str, object]) -> str:
     if method in {"GW", "OT", "FGW"}:
         transport_meta = dict(summary.get("transport_meta", {}))
         selected_hyperparameters = dict(summary.get("selected_hyperparameters", {}))
+        selection_objective = summary.get("selection_objective")
+        final_evaluation_policy = summary.get("final_evaluation_policy")
         if transport_meta:
             solver_bits = ", ".join(f"{key}={value}" for key, value in sorted(transport_meta.items()))
             lines.append(f"solver: {solver_bits}")
+        if selection_objective is not None:
+            lines.append(f"selection_objective: {selection_objective}")
+        if final_evaluation_policy is not None:
+            lines.append(f"final_evaluation_policy: {final_evaluation_policy}")
         lines.append("selected soft matches:")
         for record in summary.get("results", []):
             variable = str(record["variable"])
             top_k = record.get("top_k")
             lambda_value = record.get("lambda")
+            selected_layer = record.get("selected_layer")
+            continuous_cutoff = record.get("continuous_cutoff")
             if isinstance(selected_hyperparameters.get("top_k_by_variable"), dict):
                 top_k = selected_hyperparameters["top_k_by_variable"].get(variable, top_k)
             if isinstance(selected_hyperparameters.get("lambda_by_variable"), dict):
                 lambda_value = selected_hyperparameters["lambda_by_variable"].get(variable, lambda_value)
+            if isinstance(selected_hyperparameters.get("selected_layer_by_variable"), dict):
+                selected_layer = selected_hyperparameters["selected_layer_by_variable"].get(variable, selected_layer)
+            if isinstance(selected_hyperparameters.get("continuous_cutoff_by_variable"), dict):
+                continuous_cutoff = selected_hyperparameters["continuous_cutoff_by_variable"].get(
+                    variable,
+                    continuous_cutoff,
+                )
             lines.append(
-                f"{variable}: top_k={top_k}, lambda={lambda_value}, top_site={record.get('top_site_label')}, "
+                f"{variable}: layer={selected_layer}, top_k={top_k}, cutoff={continuous_cutoff}, "
+                f"lambda={lambda_value}, top_site={record.get('top_site_label')}, "
                 f"cal_exact={float(record.get('calibration_exact_acc', 0.0)):.4f}, "
                 f"cal_shared={float(record.get('calibration_mean_shared_digits', 0.0)):.4f}, "
                 f"test_exact={float(record['exact_acc']):.4f}, "
@@ -163,6 +184,37 @@ def format_method_candidate_sweep(method: str, payload: dict[str, object]) -> st
     """Format only the candidate-sweep section for one method."""
     lines = [str(method).upper()]
     if method in {"gw", "ot", "fgw"}:
+        layer_candidate_summaries = dict(payload.get("layer_candidate_summaries", {}))
+        if layer_candidate_summaries:
+            lines.append("layer candidate sweep:")
+            summary = build_method_selection_summary(method, payload)
+            selected_hyperparameters = dict(summary.get("selected_hyperparameters", {}))
+            selected_layer_by_variable = dict(selected_hyperparameters.get("selected_layer_by_variable", {}))
+            selected_top_k_by_variable = dict(selected_hyperparameters.get("top_k_by_variable", {}))
+            selected_lambda_by_variable = dict(selected_hyperparameters.get("lambda_by_variable", {}))
+            for variable in payload.get("target_vars", []):
+                variable_key = str(variable)
+                lines.append(f"{variable_key}:")
+                candidates = list(layer_candidate_summaries.get(variable_key, []))
+                selected_candidates = [
+                    candidate
+                    for candidate in candidates
+                    if int(candidate.get("layer", -1)) == int(selected_layer_by_variable.get(variable_key, -1))
+                ]
+                remaining_candidates = [candidate for candidate in candidates if candidate not in selected_candidates]
+                for candidate in [*selected_candidates, *remaining_candidates]:
+                    selected_marker = " [selected]" if candidate in selected_candidates else ""
+                    lines.append(
+                        f"{variable_key}{selected_marker}: layer={candidate.get('layer')}, "
+                        f"cutoff={float(candidate.get('continuous_cutoff', 0.0)):.4f}, "
+                        f"top_k={selected_top_k_by_variable.get(variable_key)}, "
+                        f"lambda={selected_lambda_by_variable.get(variable_key)}, "
+                        f"top_site={candidate.get('top_site_label', 'n/a')}, "
+                        f"cal_ce={float(candidate.get('selection_cross_entropy', 0.0)):.4f}, "
+                        f"cal_exact={float(candidate.get('selection_exact_acc', 0.0)):.4f}, "
+                        f"cal_shared={float(candidate.get('selection_mean_shared_digits', 0.0)):.4f}"
+                    )
+            return "\n".join(lines)
         calibration_sweep = dict(payload.get("calibration_sweep", {}))
         if calibration_sweep:
             lines.append("calibration sweep:")

@@ -43,11 +43,22 @@ class CompareExperimentConfig:
     calibration_pair_size: int = DEFAULT_PAIR_TRAIN_SIZE
     test_pair_size: int = DEFAULT_PAIR_TEST_SIZE
     target_vars: tuple[str, ...] = DEFAULT_TARGET_VARS
-    pair_policy: str = "unfiltered"
-    pair_pool_size: int | None = None
+    train_pair_policy: str = "unfiltered"
+    train_pair_policy_target: str = "any"
+    train_mixed_positive_fraction: float = 0.5
+    train_pair_pool_size: int | None = None
+    calibration_pair_policy: str = "unfiltered"
+    calibration_pair_policy_target: str = "any"
+    calibration_mixed_positive_fraction: float = 0.5
+    calibration_pair_pool_size: int | None = None
+    test_pair_policy: str = "unfiltered"
+    test_pair_policy_target: str = "any"
+    test_mixed_positive_fraction: float = 0.5
+    test_pair_pool_size: int | None = None
     batch_size: int = 128
     resolution: int = DEFAULT_ALIGNMENT_RESOLUTION
     fgw_alpha: float = 0.5
+    ot_epsilon: float = 5e-2
     ot_top_k_values: tuple[int, ...] | None = None
     ot_lambdas: tuple[float, ...] = (1.0,)
     das_max_epochs: int = 1
@@ -63,6 +74,9 @@ def _build_summary_lines(
     config: CompareExperimentConfig,
     device,
     backbone_meta: dict[str, object],
+    train_bank,
+    calibration_bank,
+    test_bank,
     method_payloads: dict[str, dict[str, object]],
     method_runtime_seconds: dict[str, float],
     summary_records: list[dict[str, object]],
@@ -87,13 +101,52 @@ def _build_summary_lines(
             f"test={config.test_pair_size}"
         ),
         (
-            "pair_construction: "
-            f"policy={config.pair_policy}, "
-            f"pool_size={config.pair_pool_size}"
+            "train_pair_construction: "
+            f"policy={config.train_pair_policy}, "
+            f"target={config.train_pair_policy_target}, "
+            f"mixed_positive_fraction={float(config.train_mixed_positive_fraction):.4f}, "
+            f"pool_size={config.train_pair_pool_size}"
         ),
+        (
+            "calibration_pair_construction: "
+            f"policy={config.calibration_pair_policy}, "
+            f"target={config.calibration_pair_policy_target}, "
+            f"mixed_positive_fraction={float(config.calibration_mixed_positive_fraction):.4f}, "
+            f"pool_size={config.calibration_pair_pool_size}"
+        ),
+        (
+            "test_pair_construction: "
+            f"policy={config.test_pair_policy}, "
+            f"target={config.test_pair_policy_target}, "
+            f"mixed_positive_fraction={float(config.test_mixed_positive_fraction):.4f}, "
+            f"pool_size={config.test_pair_pool_size}"
+        ),
+        f"ot_epsilon: {float(config.ot_epsilon):.6f}",
         f"factual_validation_exact_acc: {float(factual_metrics.get('exact_acc', 0.0)):.4f}",
         "",
     ]
+    for bank in (train_bank, calibration_bank, test_bank):
+        stats = dict(bank.pair_stats)
+        split = str(bank.split)
+        summary_lines.extend(
+            [
+                (
+                    f"{split} pair bank | total_pairs={int(stats.get('total_pairs', 0))} "
+                    f"| changed_any={int(stats.get('changed_any_count', 0))} "
+                    f"| unchanged_any={int(stats.get('unchanged_any_count', 0))}"
+                )
+            ]
+        )
+        per_variable = dict(stats.get("per_variable", {}))
+        for variable, variable_stats in per_variable.items():
+            summary_lines.append(
+                (
+                    f"{split} pair bank [{variable}] | changed={int(variable_stats.get('changed_count', 0))} "
+                    f"| unchanged={int(variable_stats.get('unchanged_count', 0))} "
+                    f"| changed_rate={float(variable_stats.get('changed_rate', 0.0)):.4f}"
+                )
+            )
+    summary_lines.append("")
     for method in config.methods:
         summary_lines.append(format_method_selection_summary(method_selections[method]))
         summary_lines.append("")
@@ -139,8 +192,10 @@ def run_comparison_with_model(
         config.seed + 201,
         "train",
         target_vars=tuple(config.target_vars),
-        pair_policy=config.pair_policy,
-        pair_pool_size=config.pair_pool_size,
+        pair_policy=config.train_pair_policy,
+        pair_policy_target=config.train_pair_policy_target,
+        mixed_positive_fraction=config.train_mixed_positive_fraction,
+        pair_pool_size=config.train_pair_pool_size,
     )
     calibration_bank = build_pair_bank(
         problem,
@@ -148,8 +203,10 @@ def run_comparison_with_model(
         config.seed + 301,
         "calibration",
         target_vars=tuple(config.target_vars),
-        pair_policy=config.pair_policy,
-        pair_pool_size=config.pair_pool_size,
+        pair_policy=config.calibration_pair_policy,
+        pair_policy_target=config.calibration_pair_policy_target,
+        mixed_positive_fraction=config.calibration_mixed_positive_fraction,
+        pair_pool_size=config.calibration_pair_pool_size,
     )
     test_bank = build_pair_bank(
         problem,
@@ -157,8 +214,10 @@ def run_comparison_with_model(
         config.seed + 401,
         "test",
         target_vars=tuple(config.target_vars),
-        pair_policy=config.pair_policy,
-        pair_pool_size=config.pair_pool_size,
+        pair_policy=config.test_pair_policy,
+        pair_policy_target=config.test_pair_policy_target,
+        mixed_positive_fraction=config.test_mixed_positive_fraction,
+        pair_pool_size=config.test_pair_pool_size,
     )
 
     method_payloads: dict[str, dict[str, object]] = {}
@@ -179,6 +238,7 @@ def run_comparison_with_model(
                     batch_size=config.batch_size,
                     resolution=config.resolution,
                     alpha=config.fgw_alpha,
+                    epsilon=config.ot_epsilon,
                     target_vars=tuple(config.target_vars),
                     top_k_values=config.ot_top_k_values,
                     lambda_values=config.ot_lambdas,
@@ -220,6 +280,9 @@ def run_comparison_with_model(
         config=config,
         device=device,
         backbone_meta=backbone_meta,
+        train_bank=train_bank,
+        calibration_bank=calibration_bank,
+        test_bank=test_bank,
         method_payloads=method_payloads,
         method_runtime_seconds=method_runtime_seconds,
         summary_records=summary_records,
@@ -230,9 +293,26 @@ def run_comparison_with_model(
         "checkpoint_path": str(config.checkpoint_path),
         "target_vars": list(config.target_vars),
         "pair_construction": {
-            "pair_policy": config.pair_policy,
-            "pair_pool_size": config.pair_pool_size,
+            "train": {
+                "pair_policy": config.train_pair_policy,
+                "pair_policy_target": config.train_pair_policy_target,
+                "mixed_positive_fraction": float(config.train_mixed_positive_fraction),
+                "pair_pool_size": config.train_pair_pool_size,
+            },
+            "calibration": {
+                "pair_policy": config.calibration_pair_policy,
+                "pair_policy_target": config.calibration_pair_policy_target,
+                "mixed_positive_fraction": float(config.calibration_mixed_positive_fraction),
+                "pair_pool_size": config.calibration_pair_pool_size,
+            },
+            "test": {
+                "pair_policy": config.test_pair_policy,
+                "pair_policy_target": config.test_pair_policy_target,
+                "mixed_positive_fraction": float(config.test_mixed_positive_fraction),
+                "pair_pool_size": config.test_pair_pool_size,
+            },
         },
+        "ot_epsilon": float(config.ot_epsilon),
         "backbone": backbone_meta,
         "banks": {
             "train": train_bank.metadata(),

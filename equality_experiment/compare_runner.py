@@ -75,6 +75,9 @@ def _build_summary_lines(
     config: CompareExperimentConfig,
     device,
     backbone_meta: dict[str, object],
+    train_bank,
+    calibration_bank,
+    test_bank,
     method_payloads: dict[str, dict[str, object]],
     method_runtime_seconds: dict[str, float],
     summary_records: list[dict[str, object]],
@@ -96,10 +99,69 @@ def _build_summary_lines(
             f"calibration={config.calibration_pair_size}, "
             f"test={config.test_pair_size}"
         ),
+        (
+            "train_pair_construction: "
+            f"policy={config.train_pair_policy}, "
+            f"target={config.train_pair_policy_target}, "
+            f"mixed_positive_fraction={float(config.train_mixed_positive_fraction):.4f}, "
+            f"pool_size={config.train_pair_pool_size}"
+        ),
+        (
+            "calibration_pair_construction: "
+            f"policy={config.calibration_pair_policy}, "
+            f"target={config.calibration_pair_policy_target}, "
+            f"mixed_positive_fraction={float(config.calibration_mixed_positive_fraction):.4f}, "
+            f"pool_size={config.calibration_pair_pool_size}"
+        ),
+        (
+            "test_pair_construction: "
+            f"policy={config.test_pair_policy}, "
+            f"target={config.test_pair_policy_target}, "
+            f"mixed_positive_fraction={float(config.test_mixed_positive_fraction):.4f}, "
+            f"pool_size={config.test_pair_pool_size}"
+        ),
+        f"batch_size: {config.batch_size}",
+        f"resolution: {config.resolution}",
+        f"fgw_alpha: {float(config.fgw_alpha):.4f}",
         f"ot_epsilon: {float(config.ot_epsilon):.6f}",
+        "ot_top_k_values: "
+        + ("None" if config.ot_top_k_values is None else ", ".join(str(int(value)) for value in config.ot_top_k_values)),
+        "ot_lambdas: " + ", ".join(f"{float(value):.6f}" for value in config.ot_lambdas),
+        f"das_max_epochs: {config.das_max_epochs}",
+        f"das_min_epochs: {config.das_min_epochs}",
+        f"das_plateau_patience: {config.das_plateau_patience}",
+        f"das_plateau_rel_delta: {float(config.das_plateau_rel_delta):.6f}",
+        f"das_learning_rate: {float(config.das_learning_rate):.6f}",
+        (
+            "das_subspace_dims: "
+            + ("None" if config.das_subspace_dims is None else ", ".join(str(int(value)) for value in config.das_subspace_dims))
+        ),
+        f"das_layers: {config.das_layers}",
         f"factual_validation_exact_acc: {float(factual_metrics.get('exact_acc', 0.0)):.4f}",
         "",
     ]
+    for bank in (train_bank, calibration_bank, test_bank):
+        stats = dict(bank.pair_stats)
+        split = str(bank.split)
+        summary_lines.extend(
+            [
+                (
+                    f"{split} pair bank | total_pairs={int(stats.get('total_pairs', 0))} "
+                    f"| changed_any={int(stats.get('changed_any_count', 0))} "
+                    f"| unchanged_any={int(stats.get('unchanged_any_count', 0))}"
+                )
+            ]
+        )
+        per_variable = dict(stats.get("per_variable", {}))
+        for variable, variable_stats in per_variable.items():
+            summary_lines.append(
+                (
+                    f"{split} pair bank [{variable}] | changed={int(variable_stats.get('changed_count', 0))} "
+                    f"| unchanged={int(variable_stats.get('unchanged_count', 0))} "
+                    f"| changed_rate={float(variable_stats.get('changed_rate', 0.0)):.4f}"
+                )
+            )
+    summary_lines.append("")
     for method in config.methods:
         summary_lines.append(format_method_selection_summary(method_selections[method]))
         summary_lines.append("")
@@ -233,6 +295,9 @@ def run_comparison_with_model(
         config=config,
         device=device,
         backbone_meta=backbone_meta,
+        train_bank=train_bank,
+        calibration_bank=calibration_bank,
+        test_bank=test_bank,
         method_payloads=method_payloads,
         method_runtime_seconds=method_runtime_seconds,
         summary_records=summary_records,

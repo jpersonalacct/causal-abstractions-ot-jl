@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil
 from typing import Any
 
 import numpy as np
@@ -20,6 +19,7 @@ from .scm import (
 )
 
 PAIR_POLICY_VARS = ("C1", "C2")
+DEFAULT_PAIR_POLICY_TARGET = "any"
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,8 @@ class PairBank:
     changed_by_var: dict[str, torch.Tensor]
     changed_any: torch.Tensor
     pair_policy: str
+    pair_policy_target: str
+    mixed_positive_fraction: float
     target_vars: tuple[str, ...]
     pair_policy_vars: tuple[str, ...]
     pair_pool_size: int | None
@@ -54,6 +56,8 @@ class PairBank:
             "seed": self.seed,
             "size": self.size,
             "pair_policy": self.pair_policy,
+            "pair_policy_target": self.pair_policy_target,
+            "mixed_positive_fraction": self.mixed_positive_fraction,
             "target_vars": list(self.target_vars),
             "pair_policy_vars": list(self.pair_policy_vars),
             "pair_pool_size": self.pair_pool_size,
@@ -152,6 +156,31 @@ def _summarize_pair_changes(
     }
 
 
+def _compute_policy_positive_mask(
+    changed_by_var: dict[str, np.ndarray],
+    pair_policy_target: str,
+) -> np.ndarray:
+    """Resolve the boolean mask treated as positive by the pair policy."""
+    changed_c1 = changed_by_var.get("C1")
+    changed_c2 = changed_by_var.get("C2")
+    if changed_c1 is None or changed_c2 is None:
+        raise ValueError("Pair policy targets require carry policy vars ('C1', 'C2')")
+
+    if pair_policy_target == "any":
+        return np.logical_or(changed_c1, changed_c2)
+    if pair_policy_target == "C1":
+        return changed_c1
+    if pair_policy_target == "C2":
+        return changed_c2
+    if pair_policy_target == "both":
+        return np.logical_and(changed_c1, changed_c2)
+    if pair_policy_target == "C1_only":
+        return np.logical_and(changed_c1, np.logical_not(changed_c2))
+    if pair_policy_target == "C2_only":
+        return np.logical_and(changed_c2, np.logical_not(changed_c1))
+    raise ValueError(f"Unsupported pair_policy_target={pair_policy_target}")
+
+
 def _print_pair_bank_stats(split: str, stats: dict[str, Any]) -> None:
     """Print one compact summary per split plus per-variable change rates."""
     print(
@@ -171,15 +200,16 @@ def _print_pair_bank_stats(split: str, stats: dict[str, Any]) -> None:
 
 def _select_pair_indices(
     *,
-    changed_any: np.ndarray,
+    positive_mask: np.ndarray,
     size: int,
     pair_policy: str,
+    mixed_positive_fraction: float,
     rng: np.random.Generator,
 ) -> np.ndarray:
     """Choose a final ordered-pair subset under the requested policy."""
     if size < 0:
         raise ValueError(f"Expected non-negative size, got {size}")
-    num_candidates = int(changed_any.shape[0])
+    num_candidates = int(positive_mask.shape[0])
     if size > num_candidates:
         raise ValueError(
             f"Requested size={size}, but only {num_candidates} candidate ordered pairs are available"
@@ -190,24 +220,21 @@ def _select_pair_indices(
         return shuffled[:size]
 
     selected: list[int] = []
-    if pair_policy == "positive_only":
-        for index in shuffled:
-            keep = bool(changed_any[index])
-            if keep:
-                selected.append(int(index))
-            if len(selected) == size:
-                return np.asarray(selected, dtype=np.int64)
-        raise ValueError(f"Could not construct {size} {pair_policy} pairs")
-
     if pair_policy != "mixed":
         raise ValueError(f"Unsupported pair_policy={pair_policy}")
 
-    positive_target = int(ceil(size / 2))
-    negative_target = int(size // 2)
+    if not 0.0 <= float(mixed_positive_fraction) <= 1.0:
+        raise ValueError(
+            "Expected mixed_positive_fraction to lie in [0, 1], "
+            f"got {mixed_positive_fraction}"
+        )
+    positive_target = int(np.floor(size * float(mixed_positive_fraction) + 0.5))
+    positive_target = min(max(positive_target, 0), size)
+    negative_target = size - positive_target
     positive_count = 0
     negative_count = 0
     for index in shuffled:
-        is_positive = bool(changed_any[index])
+        is_positive = bool(positive_mask[index])
         if is_positive:
             if positive_count >= positive_target:
                 continue
@@ -236,6 +263,8 @@ def build_pair_bank_from_digits(
     target_vars: tuple[str, ...] = DEFAULT_TARGET_VARS,
     pair_policy_vars: tuple[str, ...] = PAIR_POLICY_VARS,
     pair_policy: str = "unfiltered",
+    pair_policy_target: str = DEFAULT_PAIR_POLICY_TARGET,
+    mixed_positive_fraction: float = 0.5,
     pair_pool_size: int | None = None,
     verify_with_scm: bool = False,
 ) -> PairBank:
@@ -277,6 +306,8 @@ def build_pair_bank_from_digits(
         },
         changed_any=torch.tensor(changed_any_np, dtype=torch.bool),
         pair_policy=pair_policy,
+        pair_policy_target=pair_policy_target,
+        mixed_positive_fraction=float(mixed_positive_fraction),
         target_vars=tuple(target_vars),
         pair_policy_vars=tuple(pair_policy_vars),
         pair_pool_size=pair_pool_size,
@@ -294,6 +325,8 @@ def build_pair_bank(
     target_vars: tuple[str, ...] = DEFAULT_TARGET_VARS,
     pair_policy_vars: tuple[str, ...] = PAIR_POLICY_VARS,
     pair_policy: str = "unfiltered",
+    pair_policy_target: str = DEFAULT_PAIR_POLICY_TARGET,
+    mixed_positive_fraction: float = 0.5,
     pair_pool_size: int | None = None,
     verify_with_scm: bool = False,
 ) -> PairBank:
@@ -321,10 +354,12 @@ def build_pair_bank(
         cf_labels_by_var=candidate_cf_labels_np,
         policy_vars=pair_policy_vars,
     )
+    positive_mask = _compute_policy_positive_mask(changed_by_var_np, pair_policy_target)
     selected_indices = _select_pair_indices(
-        changed_any=changed_any_np,
+        positive_mask=positive_mask,
         size=size,
         pair_policy=pair_policy,
+        mixed_positive_fraction=mixed_positive_fraction,
         rng=rng,
     )
 
@@ -337,6 +372,8 @@ def build_pair_bank(
         target_vars=target_vars,
         pair_policy_vars=pair_policy_vars,
         pair_policy=pair_policy,
+        pair_policy_target=pair_policy_target,
+        mixed_positive_fraction=mixed_positive_fraction,
         pair_pool_size=resolved_pool_size,
         verify_with_scm=verify_with_scm,
     )

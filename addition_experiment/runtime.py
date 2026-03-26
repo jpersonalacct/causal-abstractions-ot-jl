@@ -19,11 +19,20 @@ def set_seed(seed: int) -> None:
 
 
 def resolve_device(device: str | None = None) -> torch.device:
-    """Choose an explicit device, falling back to CPU when unavailable."""
+    """Choose an execution device, preferring MPS on Apple Silicon when available."""
+    mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
     if device is not None:
-        if device == "cuda" and not torch.cuda.is_available():
+        if device in {"metal", "mps"}:
+            return torch.device("mps" if mps_available else "cpu")
+        if device == "cuda":
+            if torch.cuda.is_available():
+                return torch.device("cuda")
+            if mps_available:
+                return torch.device("mps")
             return torch.device("cpu")
         return torch.device(device)
+    if mps_available:
+        return torch.device("mps")
     if torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
