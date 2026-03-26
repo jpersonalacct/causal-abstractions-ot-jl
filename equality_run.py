@@ -64,6 +64,7 @@ BATCH_SIZE = 128
 RESOLUTION = 1
 FGW_ALPHA = 0.5
 OT_EPSILONS = (0.1, 0.3, 0.5)
+OT_TAUS = (1.0,)
 OT_TOP_K_VALUES = tuple(range(1, 10))
 OT_LAMBDAS = tuple(np.arange(0.1, 2.0 + 1e-9, 0.1))
 
@@ -98,7 +99,17 @@ def _format_epsilon_tag(epsilon: float) -> str:
     return f"{float(epsilon):.6f}".rstrip("0").rstrip(".").replace(".", "p")
 
 
-def build_compare_config(ot_epsilon: float, run_dir: Path, methods: tuple[str, ...]) -> CompareExperimentConfig:
+def _format_tau_tag(tau: float) -> str:
+    """Build a stable directory/file tag for one tau sweep value."""
+    return f"{float(tau):.6f}".rstrip("0").rstrip(".").replace(".", "p")
+
+
+def build_compare_config(
+    ot_epsilon: float,
+    ot_tau: float,
+    run_dir: Path,
+    methods: tuple[str, ...],
+) -> CompareExperimentConfig:
     """Build the equality comparison config."""
     return CompareExperimentConfig(
         seed=SEED,
@@ -127,6 +138,7 @@ def build_compare_config(ot_epsilon: float, run_dir: Path, methods: tuple[str, .
         resolution=RESOLUTION,
         fgw_alpha=FGW_ALPHA,
         ot_epsilon=float(ot_epsilon),
+        ot_tau=float(ot_tau),
         ot_top_k_values=OT_TOP_K_VALUES,
         ot_lambdas=tuple(OT_LAMBDAS),
         das_max_epochs=DAS_MAX_EPOCHS,
@@ -227,6 +239,7 @@ def main() -> None:
         f"resolution: {RESOLUTION}",
         f"fgw_alpha: {FGW_ALPHA}",
         "ot_epsilons: " + ", ".join(f"{float(value):.6f}" for value in OT_EPSILONS),
+        "ot_taus: " + ", ".join(f"{float(value):.6f}" for value in OT_TAUS),
         "ot_top_k_values: " + ", ".join(str(int(value)) for value in OT_TOP_K_VALUES),
         "ot_lambdas: " + ", ".join(f"{float(value):.6f}" for value in OT_LAMBDAS),
         f"das_max_epochs: {DAS_MAX_EPOCHS}",
@@ -250,7 +263,7 @@ def main() -> None:
             model=model,
             backbone_meta=backbone_meta,
             device=device,
-            config=build_compare_config(OT_EPSILONS[0], static_run_dir, NON_OT_METHODS),
+            config=build_compare_config(OT_EPSILONS[0], OT_TAUS[0], static_run_dir, NON_OT_METHODS),
             train_bank=train_bank,
             calibration_bank=calibration_bank,
             test_bank=test_bank,
@@ -278,19 +291,22 @@ def main() -> None:
     epsilon_sweeps = []
     epsilon_summary_sections = []
     if OT_METHODS:
-        for epsilon_index, ot_epsilon in enumerate(OT_EPSILONS, start=1):
+        sweep_points = [(float(ot_epsilon), float(ot_tau)) for ot_tau in OT_TAUS for ot_epsilon in OT_EPSILONS]
+        for sweep_index, (ot_epsilon, ot_tau) in enumerate(sweep_points, start=1):
             epsilon_tag = _format_epsilon_tag(ot_epsilon)
-            epsilon_run_dir = RUN_DIR / f"epsilon_{epsilon_tag}"
+            tau_tag = _format_tau_tag(ot_tau)
+            epsilon_run_dir = RUN_DIR / f"epsilon_{epsilon_tag}_tau_{tau_tag}"
             print(
-                f"[epsilon {epsilon_index}/{len(OT_EPSILONS)}] "
+                f"[sweep {sweep_index}/{len(sweep_points)}] "
                 f"methods={', '.join(OT_METHODS)} "
                 f"| ot_epsilon={float(ot_epsilon):.6f}"
+                f" | ot_tau={float(ot_tau):.6f}"
             )
             comparison = run_comparison_with_banks(
                 model=model,
                 backbone_meta=backbone_meta,
                 device=device,
-                config=build_compare_config(ot_epsilon, epsilon_run_dir, OT_METHODS),
+                config=build_compare_config(ot_epsilon, ot_tau, epsilon_run_dir, OT_METHODS),
                 train_bank=train_bank,
                 calibration_bank=calibration_bank,
                 test_bank=test_bank,
@@ -299,6 +315,7 @@ def main() -> None:
             epsilon_sweeps.append(
                 {
                     "ot_epsilon": float(ot_epsilon),
+                    "ot_tau": float(ot_tau),
                     "methods": list(OT_METHODS),
                     "output_path": str(epsilon_run_dir / "equality_run_results.json"),
                     "summary_path": str(epsilon_summary_path),
@@ -309,7 +326,7 @@ def main() -> None:
             epsilon_summary_sections.append(
                 "\n".join(
                     [
-                        f"OT epsilon sweep: {float(ot_epsilon):.6f}",
+                        f"OT sweep: epsilon={float(ot_epsilon):.6f}, tau={float(ot_tau):.6f}",
                         "",
                         summary_text,
                     ]
@@ -321,6 +338,7 @@ def main() -> None:
         "checkpoint_path": str(CHECKPOINT_PATH),
         "retrain_backbone": RETRAIN_BACKBONE,
         "ot_epsilons": [float(value) for value in OT_EPSILONS],
+        "ot_taus": [float(value) for value in OT_TAUS],
         "target_vars": list(TARGET_VARS),
         "fixed_method_runs": static_runs,
         "epsilon_sweeps": epsilon_sweeps,

@@ -60,6 +60,7 @@ class CompareExperimentConfig:
     resolution: int = DEFAULT_ALIGNMENT_RESOLUTION
     fgw_alpha: float = 0.5
     ot_epsilon: float = 5e-2
+    ot_tau: float = 1.0
     ot_top_k_values: tuple[int, ...] | None = None
     ot_lambdas: tuple[float, ...] = (1.0,)
     das_max_epochs: int = 1
@@ -124,6 +125,7 @@ def _build_summary_lines(
         f"resolution: {config.resolution}",
         f"fgw_alpha: {float(config.fgw_alpha):.4f}",
         f"ot_epsilon: {float(config.ot_epsilon):.6f}",
+        f"ot_tau: {float(config.ot_tau):.6f}",
         "ot_top_k_values: "
         + ("None" if config.ot_top_k_values is None else ", ".join(str(int(value)) for value in config.ot_top_k_values)),
         "ot_lambdas: " + ", ".join(f"{float(value):.6f}" for value in config.ot_lambdas),
@@ -275,6 +277,7 @@ def run_comparison_with_banks(
                     resolution=config.resolution,
                     alpha=config.fgw_alpha,
                     epsilon=config.ot_epsilon,
+                    tau=config.ot_tau,
                     target_vars=tuple(config.target_vars),
                     top_k_values=config.ot_top_k_values,
                     lambda_values=config.ot_lambdas,
@@ -329,6 +332,7 @@ def run_comparison_with_banks(
         "checkpoint_path": str(config.checkpoint_path),
         "target_vars": list(config.target_vars),
         "ot_epsilon": float(config.ot_epsilon),
+        "ot_tau": float(config.ot_tau),
         "backbone": backbone_meta,
         "banks": {
             "train": train_bank.metadata(),

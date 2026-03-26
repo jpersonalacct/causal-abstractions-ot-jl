@@ -59,6 +59,7 @@ class CompareExperimentConfig:
     resolution: int = DEFAULT_ALIGNMENT_RESOLUTION
     fgw_alpha: float = 0.5
     ot_epsilon: float = 5e-2
+    ot_tau: float = 1.0
     ot_top_k_values: tuple[int, ...] | None = None
     ot_lambdas: tuple[float, ...] = (1.0,)
     das_max_epochs: int = 1
@@ -122,6 +123,7 @@ def _build_summary_lines(
             f"pool_size={config.test_pair_pool_size}"
         ),
         f"ot_epsilon: {float(config.ot_epsilon):.6f}",
+        f"ot_tau: {float(config.ot_tau):.6f}",
         f"factual_validation_exact_acc: {float(factual_metrics.get('exact_acc', 0.0)):.4f}",
         "",
     ]
@@ -239,6 +241,7 @@ def run_comparison_with_model(
                     resolution=config.resolution,
                     alpha=config.fgw_alpha,
                     epsilon=config.ot_epsilon,
+                    tau=config.ot_tau,
                     target_vars=tuple(config.target_vars),
                     top_k_values=config.ot_top_k_values,
                     lambda_values=config.ot_lambdas,
@@ -313,6 +316,7 @@ def run_comparison_with_model(
             },
         },
         "ot_epsilon": float(config.ot_epsilon),
+        "ot_tau": float(config.ot_tau),
         "backbone": backbone_meta,
         "banks": {
             "train": train_bank.metadata(),

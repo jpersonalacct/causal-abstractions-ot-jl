@@ -53,6 +53,7 @@ class OTConfig:
     ranking_k: int = 5
     resolution: int = DEFAULT_ALIGNMENT_RESOLUTION
     alpha: float = 0.5
+    tau: float = 1.0
     target_vars: tuple[str, ...] = DEFAULT_TARGET_VARS
     top_k_values: tuple[int, ...] | None = None
     lambda_values: tuple[float, ...] = (0.5, 0.75, 1.0, 1.25, 1.5)
@@ -182,7 +183,7 @@ def solve_gw_transport(
     last_transport = None
     last_log = None
     for multiplier in config.epsilon_retry_multipliers:
-        epsilon = config.epsilon * multiplier
+        epsilon = config.epsilon * config.tau * multiplier
         transport, log = ot.gromov.entropic_gromov_wasserstein(
             cost_var,
             cost_site,
@@ -198,8 +199,8 @@ def solve_gw_transport(
         last_transport = transport
         last_log = log
         if np.isfinite(transport).all() and float(np.sum(transport)) > 0.0:
-            return transport, {"method": "gw", "epsilon_used": epsilon}
-    return last_transport, {"method": "gw_degenerate", "log": last_log}
+            return transport, {"method": "gw", "epsilon_used": epsilon, "tau_used": config.tau}
+    return last_transport, {"method": "gw_degenerate", "tau_used": config.tau, "log": last_log}
 
 
 def solve_ot_transport(
@@ -211,7 +212,7 @@ def solve_ot_transport(
     """Solve the entropic optimal transport problem on direct costs."""
     last_transport = None
     for multiplier in config.epsilon_retry_multipliers:
-        epsilon = config.epsilon * multiplier
+        epsilon = config.epsilon * config.tau * multiplier
         transport = ot.sinkhorn(
             p,
             q,
@@ -223,8 +224,8 @@ def solve_ot_transport(
         )
         last_transport = transport
         if np.isfinite(transport).all() and float(np.sum(transport)) > 0.0:
-            return transport, {"method": "ot", "epsilon_used": epsilon}
-    return last_transport, {"method": "ot_degenerate"}
+            return transport, {"method": "ot", "epsilon_used": epsilon, "tau_used": config.tau}
+    return last_transport, {"method": "ot_degenerate", "tau_used": config.tau}
 
 
 def solve_fgw_transport(
@@ -239,7 +240,7 @@ def solve_fgw_transport(
     last_transport = None
     last_log = None
     for multiplier in config.epsilon_retry_multipliers:
-        epsilon = config.epsilon * multiplier
+        epsilon = config.epsilon * config.tau * multiplier
         transport, log = ot.gromov.BAPG_fused_gromov_wasserstein(
             cost_cross,
             cost_var,
@@ -257,8 +258,8 @@ def solve_fgw_transport(
         last_transport = transport
         last_log = log
         if np.isfinite(transport).all() and float(np.sum(transport)) > 0.0:
-            return transport, {"method": "fgw", "epsilon_used": epsilon, "alpha": config.alpha}
-    return last_transport, {"method": "fgw_degenerate", "alpha": config.alpha, "log": last_log}
+            return transport, {"method": "fgw", "epsilon_used": epsilon, "tau_used": config.tau, "alpha": config.alpha}
+    return last_transport, {"method": "fgw_degenerate", "tau_used": config.tau, "alpha": config.alpha, "log": last_log}
 
 
 def build_rankings(
