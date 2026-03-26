@@ -11,9 +11,36 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgb
 import numpy as np
 
 from .runtime import ensure_parent_dir
+
+METHOD_PASTEL_COLORS = {
+    "das": "#a8d5ba",
+    "fgw": "#f6bd60",
+    "gw": "#9ecae1",
+    "ot": "#cdb4db",
+}
+
+DEFAULT_PASTEL_COLORS = (
+    "#9ecae1",
+    "#f6bd60",
+    "#a8d5ba",
+    "#cdb4db",
+    "#f7cad0",
+    "#bde0fe",
+)
+
+
+def _shade_color(color: str, shade_index: int, num_shades: int) -> tuple[float, float, float]:
+    """Return a soft shade of the base color, lighter for earlier groups."""
+    base = np.asarray(to_rgb(color), dtype=float)
+    if num_shades <= 1:
+        mix = 0.0
+    else:
+        mix = 0.32 - 0.22 * (shade_index / float(num_shades - 1))
+    return tuple((1.0 - mix) * base + mix * np.ones(3, dtype=float))
 
 
 def _mean_std(values: list[float]) -> tuple[float, float]:
@@ -172,7 +199,11 @@ def _plot_mean_std_bars(
     x = np.arange(len(methods))
 
     fig, ax = plt.subplots(figsize=(8, 4.8), constrained_layout=True)
-    ax.bar(x, means, yerr=stds, capsize=6)
+    colors = [
+        METHOD_PASTEL_COLORS.get(str(record["method"]).lower(), DEFAULT_PASTEL_COLORS[index % len(DEFAULT_PASTEL_COLORS)])
+        for index, record in enumerate(records)
+    ]
+    ax.bar(x, means, yerr=stds, capsize=6, color=colors, edgecolor="#6b7280", linewidth=0.8)
     ax.set_xticks(x, methods)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
@@ -216,16 +247,25 @@ def _plot_grouped_mean_std_bars(
     for index, series in enumerate(series_values):
         means = []
         stds = []
+        bar_colors = []
+        base_color = METHOD_PASTEL_COLORS.get(
+            str(series).lower(),
+            DEFAULT_PASTEL_COLORS[index % len(DEFAULT_PASTEL_COLORS)],
+        )
         for group in group_values:
             record = record_map.get((group, series))
             means.append(float(record[mean_key]) if record is not None else 0.0)
             stds.append(float(record[std_key]) if record is not None else 0.0)
+            bar_colors.append(_shade_color(base_color, len(bar_colors), len(group_values)))
         ax.bar(
             x + offsets[index],
             means,
             width=width,
             yerr=stds,
             capsize=5,
+            color=bar_colors,
+            edgecolor="#6b7280",
+            linewidth=0.8,
             label=str(series).upper(),
         )
     ax.set_xticks(x, group_values)

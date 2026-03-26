@@ -15,6 +15,27 @@ import numpy as np
 from .constants import DEFAULT_TARGET_VARS
 from .runtime import ensure_parent_dir
 
+METHOD_PASTEL_COLORS = {
+    "das": "#a8d5ba",
+    "fgw": "#f6bd60",
+    "gw": "#9ecae1",
+    "ot": "#cdb4db",
+}
+
+SUMMARY_PASTEL_COLORS = {
+    "exact": "#9ecae1",
+    "shared": "#f7c59f",
+}
+
+DEFAULT_PASTEL_COLORS = (
+    "#9ecae1",
+    "#f6bd60",
+    "#a8d5ba",
+    "#cdb4db",
+    "#f7cad0",
+    "#bde0fe",
+)
+
 
 def _group_records(records: list[dict[str, object]], key: str) -> dict[str, dict[str, float]]:
     """Group result values by method and abstract variable."""
@@ -53,7 +74,15 @@ def save_comparison_plots(
     fig, ax = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
     for idx, method in enumerate(methods):
         y = [exact_by_method.get(method, {}).get(variable, np.nan) for variable in variables]
-        ax.bar(x + (idx - (len(methods) - 1) / 2.0) * width, y, width=width, label=method.upper())
+        ax.bar(
+            x + (idx - (len(methods) - 1) / 2.0) * width,
+            y,
+            width=width,
+            color=METHOD_PASTEL_COLORS.get(method.lower(), DEFAULT_PASTEL_COLORS[idx % len(DEFAULT_PASTEL_COLORS)]),
+            edgecolor="#6b7280",
+            linewidth=0.8,
+            label=method.upper(),
+        )
     ax.set_xticks(x, variables)
     ax.set_ylim(0.0, 1.0)
     ax.set_ylabel("Exact Counterfactual Accuracy")
@@ -66,7 +95,15 @@ def save_comparison_plots(
     fig, ax = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
     for idx, method in enumerate(methods):
         y = [shared_by_method.get(method, {}).get(variable, np.nan) for variable in variables]
-        ax.bar(x + (idx - (len(methods) - 1) / 2.0) * width, y, width=width, label=method.upper())
+        ax.bar(
+            x + (idx - (len(methods) - 1) / 2.0) * width,
+            y,
+            width=width,
+            color=METHOD_PASTEL_COLORS.get(method.lower(), DEFAULT_PASTEL_COLORS[idx % len(DEFAULT_PASTEL_COLORS)]),
+            edgecolor="#6b7280",
+            linewidth=0.8,
+            label=method.upper(),
+        )
     ax.set_xticks(x, variables)
     ax.set_ylim(0.0, 3.0)
     ax.set_ylabel("Mean Shared Digits")
@@ -81,8 +118,24 @@ def save_comparison_plots(
     summary_exact = [float(record["exact_acc"]) for record in summary]
     summary_shared = [float(record["mean_shared_digits"]) for record in summary]
     summary_x = np.arange(len(summary_methods))
-    ax.bar(summary_x - 0.18, summary_exact, width=0.36, label="Exact")
-    ax.bar(summary_x + 0.18, summary_shared, width=0.36, label="Shared digits")
+    ax.bar(
+        summary_x - 0.18,
+        summary_exact,
+        width=0.36,
+        color=SUMMARY_PASTEL_COLORS["exact"],
+        edgecolor="#6b7280",
+        linewidth=0.8,
+        label="Exact",
+    )
+    ax.bar(
+        summary_x + 0.18,
+        summary_shared,
+        width=0.36,
+        color=SUMMARY_PASTEL_COLORS["shared"],
+        edgecolor="#6b7280",
+        linewidth=0.8,
+        label="Shared digits",
+    )
     ax.set_xticks(summary_x, summary_methods)
     ax.set_title("Average summary across abstract variables")
     ax.legend(loc="best")
@@ -122,7 +175,7 @@ def save_comparison_plots(
                 transport,
                 aspect="auto",
                 interpolation="nearest",
-                cmap="viridis",
+                cmap="GnBu",
                 vmin=0.0,
                 vmax=vmax if vmax > 0.0 else None,
             )
