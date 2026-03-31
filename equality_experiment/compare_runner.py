@@ -61,7 +61,8 @@ class CompareExperimentConfig:
     fgw_alpha: float = 0.5
     ot_epsilon: float = 5e-2
     ot_tau: float = 1.0
-    uot_reg_m: float = 1.0
+    uot_beta_abstract: float = 1.0
+    uot_beta_neural: float = 1.0
     signature_mode: str = "prob_delta"
     ot_top_k_values: tuple[int, ...] | None = None
     ot_lambdas: tuple[float, ...] = (1.0,)
@@ -128,7 +129,8 @@ def _build_summary_lines(
         f"fgw_alpha: {float(config.fgw_alpha):.4f}",
         f"ot_epsilon: {float(config.ot_epsilon):.6f}",
         f"ot_tau: {float(config.ot_tau):.6f}",
-        f"uot_reg_m: {float(config.uot_reg_m):.6f}",
+        f"uot_beta_abstract: {float(config.uot_beta_abstract):.6f}",
+        f"uot_beta_neural: {float(config.uot_beta_neural):.6f}",
         f"signature_mode: {config.signature_mode}",
         "ot_top_k_values: "
         + ("None" if config.ot_top_k_values is None else ", ".join(str(int(value)) for value in config.ot_top_k_values)),
@@ -282,7 +284,8 @@ def run_comparison_with_banks(
                     alpha=config.fgw_alpha,
                     epsilon=config.ot_epsilon,
                     tau=config.ot_tau,
-                    uot_reg_m=config.uot_reg_m,
+                    uot_beta_abstract=config.uot_beta_abstract,
+                    uot_beta_neural=config.uot_beta_neural,
                     signature_mode=getattr(config, "signature_mode", "prob_delta"),
                     target_vars=tuple(config.target_vars),
                     top_k_values=config.ot_top_k_values,
@@ -339,6 +342,8 @@ def run_comparison_with_banks(
         "target_vars": list(config.target_vars),
         "ot_epsilon": float(config.ot_epsilon),
         "ot_tau": float(config.ot_tau),
+        "uot_beta_abstract": float(config.uot_beta_abstract),
+        "uot_beta_neural": float(config.uot_beta_neural),
         "backbone": backbone_meta,
         "banks": {
             "train": train_bank.metadata(),

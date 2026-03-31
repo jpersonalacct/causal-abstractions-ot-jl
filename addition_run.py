@@ -80,12 +80,12 @@ DAS_LAYERS = None
 
 def _format_epsilon_tag(epsilon: float) -> str:
     """Build a stable directory/file tag for one epsilon sweep value."""
-    return f"{float(epsilon):.6f}".rstrip("0").rstrip(".").replace(".", "p")
+    return f"{float(epsilon):.6f}".rstrip("0").rstrip(".")
 
 
 def _format_tau_tag(tau: float) -> str:
     """Build a stable directory/file tag for one tau sweep value."""
-    return f"{float(tau):.6f}".rstrip("0").rstrip(".").replace(".", "p")
+    return f"{float(tau):.6f}".rstrip("0").rstrip(".")
 
 
 def build_compare_config(

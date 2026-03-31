@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-import ot
 import torch
 import torch.nn.functional as F
 
@@ -54,13 +53,183 @@ class OTConfig:
     resolution: int = DEFAULT_ALIGNMENT_RESOLUTION
     alpha: float = 0.5
     tau: float = 1.0
-    uot_reg_m: float = 1.0
+    uot_beta_abstract: float = 1.0
+    uot_beta_neural: float = 1.0
     target_vars: tuple[str, ...] = DEFAULT_TARGET_VARS
     top_k_values: tuple[int, ...] | None = None
     lambda_values: tuple[float, ...] = (0.5, 0.75, 1.0, 1.25, 1.5)
     selection_verbose: bool = True
     calibration_progress_interval: int = 250
     signature_mode: str = "prob_delta"
+
+
+def _squared_euclidean_cost(u_points: torch.Tensor, v_points: torch.Tensor) -> torch.Tensor:
+    """Compute squared Euclidean transport costs between two point clouds."""
+    u = u_points.to(dtype=torch.float32)
+    v = v_points.to(dtype=torch.float32)
+    return torch.cdist(u, v, p=2).pow(2)
+
+
+def sinkhorn_uniform_ot(
+    u_points: torch.Tensor,
+    v_points: torch.Tensor,
+    epsilon: float,
+    n_iter: int,
+    temperature: float = 1.0,
+) -> tuple[torch.Tensor, float]:
+    """Entropic OT with uniform marginals and squared Euclidean cost."""
+    if epsilon <= 0:
+        raise ValueError("epsilon must be > 0")
+    if temperature <= 0:
+        raise ValueError("temperature must be > 0")
+    if n_iter <= 0:
+        raise ValueError("n_iter must be > 0")
+
+    u = u_points.to(dtype=torch.float32)
+    v = v_points.to(dtype=torch.float32)
+    m, n = u.size(0), v.size(0)
+
+    a = torch.full((m,), 1.0 / m, dtype=torch.float32, device=u.device)
+    b = torch.full((n,), 1.0 / n, dtype=torch.float32, device=v.device)
+    cost = _squared_euclidean_cost(u, v)
+    kernel = torch.exp(-cost / (epsilon * temperature)).clamp_min(1e-30)
+
+    r = torch.ones_like(a)
+    c = torch.ones_like(b)
+    for _ in range(n_iter):
+        kr = kernel @ c
+        r = a / kr.clamp_min(1e-30)
+        kt = kernel.transpose(0, 1) @ r
+        c = b / kt.clamp_min(1e-30)
+
+    pi = r[:, None] * kernel * c[None, :]
+    ot_cost = float((pi * cost).sum().item())
+    return pi, ot_cost
+
+
+def sinkhorn_unbalanced_ot(
+    u_points: torch.Tensor,
+    v_points: torch.Tensor,
+    epsilon: float,
+    n_iter: int,
+    temperature: float = 1.0,
+    tau_abstract: float = 1.0e6,
+    tau_neural: float = 1.0,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Repo-style entropic unbalanced OT with KL penalties on marginals."""
+    if epsilon <= 0:
+        raise ValueError("epsilon must be > 0")
+    if temperature <= 0:
+        raise ValueError("temperature must be > 0")
+    if n_iter <= 0:
+        raise ValueError("n_iter must be > 0")
+    if tau_abstract <= 0 or tau_neural <= 0:
+        raise ValueError("tau_abstract and tau_neural must be > 0")
+
+    u = u_points.to(dtype=torch.float32)
+    v = v_points.to(dtype=torch.float32)
+    m, n = u.size(0), v.size(0)
+
+    a = torch.full((m,), 1.0 / m, dtype=torch.float32, device=u.device)
+    b = torch.full((n,), 1.0 / n, dtype=torch.float32, device=v.device)
+    cost = _squared_euclidean_cost(u, v)
+    kernel = torch.exp(-cost / (epsilon * temperature)).clamp_min(1e-30)
+
+    rho_a = float(tau_abstract / (tau_abstract + epsilon))
+    rho_b = float(tau_neural / (tau_neural + epsilon))
+
+    r = torch.ones_like(a)
+    c = torch.ones_like(b)
+    for _ in range(n_iter):
+        kr = kernel @ c
+        r = (a / kr.clamp_min(1e-30)).pow(rho_a)
+        kt = kernel.transpose(0, 1) @ r
+        c = (b / kt.clamp_min(1e-30)).pow(rho_b)
+
+    pi = r[:, None] * kernel * c[None, :]
+    pi_row = pi.sum(dim=1)
+    pi_col = pi.sum(dim=0)
+    transport_cost = float((pi * cost).sum().item())
+    kl_row = float(
+        (
+            pi_row * torch.log(pi_row.clamp_min(1e-30) / a.clamp_min(1e-30))
+            - pi_row
+            + a
+        ).sum().item()
+    )
+    kl_col = float(
+        (
+            pi_col * torch.log(pi_col.clamp_min(1e-30) / b.clamp_min(1e-30))
+            - pi_col
+            + b
+        ).sum().item()
+    )
+    total_obj = transport_cost + float(tau_abstract) * kl_row + float(tau_neural) * kl_col
+    return pi, {
+        "transport_cost": transport_cost,
+        "kl_abstract": kl_row,
+        "kl_neural": kl_col,
+        "estimated_cost": total_obj,
+        "matched_mass": float(pi.sum().item()),
+    }
+
+
+def _sinkhorn_from_cost(
+    cost: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    epsilon: float,
+    n_iter: int,
+    temperature: float = 1.0,
+) -> tuple[torch.Tensor, float]:
+    """Balanced entropic OT on a precomputed cost matrix."""
+    if epsilon <= 0:
+        raise ValueError("epsilon must be > 0")
+    if temperature <= 0:
+        raise ValueError("temperature must be > 0")
+    if n_iter <= 0:
+        raise ValueError("n_iter must be > 0")
+
+    cost = cost.to(dtype=torch.float32)
+    a = a.to(dtype=torch.float32, device=cost.device)
+    b = b.to(dtype=torch.float32, device=cost.device)
+    kernel = torch.exp(-cost / (epsilon * temperature)).clamp_min(1e-30)
+
+    r = torch.ones_like(a)
+    c = torch.ones_like(b)
+    for _ in range(n_iter):
+        r = a / (kernel @ c).clamp_min(1e-30)
+        c = b / (kernel.transpose(0, 1) @ r).clamp_min(1e-30)
+
+    pi = r[:, None] * kernel * c[None, :]
+    total_cost = float((pi * cost).sum().item())
+    return pi, total_cost
+
+
+def _gw_linearized_cost_square(
+    cost_var: torch.Tensor,
+    cost_site: torch.Tensor,
+    p: torch.Tensor,
+    q: torch.Tensor,
+    transport: torch.Tensor,
+) -> torch.Tensor:
+    """Compute the square-loss GW linearized cost matrix."""
+    const_var = (cost_var.pow(2) @ p).unsqueeze(1)
+    const_site = (cost_site.pow(2) @ q).unsqueeze(0)
+    coupling_term = cost_var @ transport @ cost_site.transpose(0, 1)
+    return const_var + const_site - 2.0 * coupling_term
+
+
+def _gw_objective_square(
+    cost_var: torch.Tensor,
+    cost_site: torch.Tensor,
+    p: torch.Tensor,
+    q: torch.Tensor,
+    transport: torch.Tensor,
+) -> float:
+    """Evaluate the square-loss GW objective for a transport plan."""
+    linearized_cost = _gw_linearized_cost_square(cost_var, cost_site, p, q, transport)
+    return float((linearized_cost * transport).sum().item())
 
 
 def _resolve_bank_for_variable(
@@ -233,108 +402,126 @@ def solve_gw_transport(
     q: np.ndarray,
     config: OTConfig,
 ) -> tuple[np.ndarray, dict[str, object]]:
-    """Solve the entropic Gromov-Wasserstein transport problem."""
+    """Solve GW via entropic linearization with a custom Sinkhorn inner step."""
+    cost_var_t = torch.as_tensor(cost_var, dtype=torch.float32)
+    cost_site_t = torch.as_tensor(cost_site, dtype=torch.float32)
+    p_t = torch.as_tensor(p, dtype=torch.float32)
+    q_t = torch.as_tensor(q, dtype=torch.float32)
+    init_transport = torch.outer(p_t, q_t)
     last_transport = None
-    last_log = None
+    last_objective = None
     for multiplier in config.epsilon_retry_multipliers:
-        regularization = config.tau * multiplier
-        transport, log = ot.gromov.entropic_gromov_wasserstein(
-            cost_var,
-            cost_site,
-            p,
-            q,
-            loss_fun="square_loss",
-            epsilon=regularization,
-            max_iter=config.max_iter,
-            tol=config.tol,
-            log=True,
-            verbose=config.verbose,
-        )
+        temperature = float(config.tau) * float(multiplier)
+        transport_t = init_transport.clone()
+        for _ in range(int(config.max_iter)):
+            linear_cost = _gw_linearized_cost_square(cost_var_t, cost_site_t, p_t, q_t, transport_t)
+            next_transport_t, _ = _sinkhorn_from_cost(
+                linear_cost,
+                p_t,
+                q_t,
+                epsilon=float(config.epsilon),
+                n_iter=int(config.max_iter),
+                temperature=temperature,
+            )
+            delta = float(torch.max(torch.abs(next_transport_t - transport_t)).item())
+            transport_t = next_transport_t
+            if delta <= float(config.tol):
+                break
+        transport = transport_t.detach().cpu().numpy()
         last_transport = transport
-        last_log = log
+        last_objective = _gw_objective_square(cost_var_t, cost_site_t, p_t, q_t, transport_t)
         if np.isfinite(transport).all() and float(np.sum(transport)) > 0.0:
             return transport, {
                 "method": "gw",
-                "regularization_used": regularization,
-                "tau_used": config.tau,
-                "epsilon_config": config.epsilon,
+                "solver": "hard_coded_gw_sinkhorn",
+                "regularization_used": float(config.epsilon) * temperature,
+                "tau_used": temperature,
+                "epsilon_config": float(config.epsilon),
+                "gw_objective": float(last_objective),
             }
     return last_transport, {
         "method": "gw_degenerate",
-        "tau_used": config.tau,
-        "epsilon_config": config.epsilon,
-        "log": last_log,
+        "solver": "hard_coded_gw_sinkhorn",
+        "tau_used": float(config.tau),
+        "epsilon_config": float(config.epsilon),
+        "gw_objective": last_objective,
     }
 
 
 def solve_ot_transport(
-    cost_cross: np.ndarray,
-    p: np.ndarray,
-    q: np.ndarray,
+    variable_signatures: torch.Tensor,
+    site_signatures: torch.Tensor,
     config: OTConfig,
 ) -> tuple[np.ndarray, dict[str, object]]:
-    """Solve the entropic optimal transport problem on direct costs."""
+    """Solve the hard-coded balanced Sinkhorn transport on direct signature points."""
     last_transport = None
     for multiplier in config.epsilon_retry_multipliers:
-        regularization = config.tau * multiplier
-        transport = ot.sinkhorn(
-            p,
-            q,
-            cost_cross,
-            reg=regularization,
-            numItermax=config.max_iter,
-            stopThr=config.tol,
-            verbose=config.verbose,
+        temperature = float(config.tau) * float(multiplier)
+        transport_tensor, transport_cost = sinkhorn_uniform_ot(
+            variable_signatures,
+            site_signatures,
+            epsilon=float(config.epsilon),
+            n_iter=int(config.max_iter),
+            temperature=temperature,
         )
+        transport = transport_tensor.detach().cpu().numpy()
         last_transport = transport
         if np.isfinite(transport).all() and float(np.sum(transport)) > 0.0:
             return transport, {
                 "method": "ot",
-                "regularization_used": regularization,
-                "tau_used": config.tau,
-                "epsilon_config": config.epsilon,
+                "solver": "hard_coded_sinkhorn_uniform",
+                "regularization_used": float(config.epsilon) * temperature,
+                "tau_used": temperature,
+                "epsilon_config": float(config.epsilon),
+                "transport_cost": float(transport_cost),
+                "matched_mass": float(transport_tensor.sum().item()),
             }
     return last_transport, {
         "method": "ot_degenerate",
-        "tau_used": config.tau,
-        "epsilon_config": config.epsilon,
+        "solver": "hard_coded_sinkhorn_uniform",
+        "tau_used": float(config.tau),
+        "epsilon_config": float(config.epsilon),
     }
 
 
 def solve_uot_transport(
-    cost_cross: np.ndarray,
-    p: np.ndarray,
-    q: np.ndarray,
+    variable_signatures: torch.Tensor,
+    site_signatures: torch.Tensor,
     config: OTConfig,
 ) -> tuple[np.ndarray, dict[str, object]]:
-    """Solve the entropic unbalanced optimal transport problem on direct costs."""
+    """Solve the hard-coded unbalanced Sinkhorn transport on direct signature points."""
     last_transport = None
     for multiplier in config.epsilon_retry_multipliers:
-        regularization = config.tau * multiplier
-        transport = ot.unbalanced.sinkhorn_unbalanced(
-            p,
-            q,
-            cost_cross,
-            reg=regularization,
-            reg_m=float(config.uot_reg_m),
-            numItermax=config.max_iter,
-            stopThr=config.tol,
-            verbose=config.verbose,
+        temperature = float(config.tau) * float(multiplier)
+        transport_tensor, info = sinkhorn_unbalanced_ot(
+            variable_signatures,
+            site_signatures,
+            epsilon=float(config.epsilon),
+            n_iter=int(config.max_iter),
+            temperature=temperature,
+            tau_abstract=float(config.uot_beta_abstract),
+            tau_neural=float(config.uot_beta_neural),
         )
+        transport = transport_tensor.detach().cpu().numpy()
         last_transport = transport
         if np.isfinite(transport).all() and float(np.sum(transport)) > 0.0:
             return transport, {
                 "method": "uot",
-                "regularization_used": regularization,
-                "tau_used": config.tau,
-                "uot_reg_m": float(config.uot_reg_m),
-                "epsilon_config": config.epsilon,
+                "solver": "hard_coded_sinkhorn_unbalanced",
+                "regularization_used": float(config.epsilon) * temperature,
+                "tau_used": temperature,
+                "uot_beta_abstract": float(config.uot_beta_abstract),
+                "uot_beta_neural": float(config.uot_beta_neural),
+                "epsilon_config": float(config.epsilon),
+                **info,
             }
     return last_transport, {
         "method": "uot_degenerate",
-        "tau_used": config.tau,
-        "uot_reg_m": float(config.uot_reg_m),
-        "epsilon_config": config.epsilon,
+        "solver": "hard_coded_sinkhorn_unbalanced",
+        "tau_used": float(config.tau),
+        "uot_beta_abstract": float(config.uot_beta_abstract),
+        "uot_beta_neural": float(config.uot_beta_neural),
+        "epsilon_config": float(config.epsilon),
     }
 
 
@@ -346,41 +533,55 @@ def solve_fgw_transport(
     q: np.ndarray,
     config: OTConfig,
 ) -> tuple[np.ndarray, dict[str, object]]:
-    """Solve the fused Gromov-Wasserstein transport problem."""
+    """Solve FGW via entropic linearization with a custom Sinkhorn inner step."""
+    cost_cross_t = torch.as_tensor(cost_cross, dtype=torch.float32)
+    cost_var_t = torch.as_tensor(cost_var, dtype=torch.float32)
+    cost_site_t = torch.as_tensor(cost_site, dtype=torch.float32)
+    p_t = torch.as_tensor(p, dtype=torch.float32)
+    q_t = torch.as_tensor(q, dtype=torch.float32)
+    init_transport = torch.outer(p_t, q_t)
     last_transport = None
-    last_log = None
+    last_objective = None
     for multiplier in config.epsilon_retry_multipliers:
-        regularization = config.tau * multiplier
-        transport, log = ot.gromov.BAPG_fused_gromov_wasserstein(
-            cost_cross,
-            cost_var,
-            cost_site,
-            p=p,
-            q=q,
-            loss_fun="square_loss",
-            epsilon=regularization,
-            alpha=config.alpha,
-            max_iter=config.max_iter,
-            tol=config.tol,
-            verbose=config.verbose,
-            log=True,
-        )
+        temperature = float(config.tau) * float(multiplier)
+        transport_t = init_transport.clone()
+        for _ in range(int(config.max_iter)):
+            gw_linear_cost = _gw_linearized_cost_square(cost_var_t, cost_site_t, p_t, q_t, transport_t)
+            fused_cost = (1.0 - float(config.alpha)) * cost_cross_t + float(config.alpha) * gw_linear_cost
+            next_transport_t, _ = _sinkhorn_from_cost(
+                fused_cost,
+                p_t,
+                q_t,
+                epsilon=float(config.epsilon),
+                n_iter=int(config.max_iter),
+                temperature=temperature,
+            )
+            delta = float(torch.max(torch.abs(next_transport_t - transport_t)).item())
+            transport_t = next_transport_t
+            if delta <= float(config.tol):
+                break
+        transport = transport_t.detach().cpu().numpy()
         last_transport = transport
-        last_log = log
+        gw_objective = _gw_objective_square(cost_var_t, cost_site_t, p_t, q_t, transport_t)
+        linear_term = float((cost_cross_t * transport_t).sum().item())
+        last_objective = (1.0 - float(config.alpha)) * linear_term + float(config.alpha) * gw_objective
         if np.isfinite(transport).all() and float(np.sum(transport)) > 0.0:
             return transport, {
                 "method": "fgw",
-                "regularization_used": regularization,
-                "tau_used": config.tau,
-                "epsilon_config": config.epsilon,
-                "alpha": config.alpha,
+                "solver": "hard_coded_fgw_sinkhorn",
+                "regularization_used": float(config.epsilon) * temperature,
+                "tau_used": temperature,
+                "epsilon_config": float(config.epsilon),
+                "alpha": float(config.alpha),
+                "fgw_objective": float(last_objective),
             }
     return last_transport, {
         "method": "fgw_degenerate",
-        "tau_used": config.tau,
-        "epsilon_config": config.epsilon,
-        "alpha": config.alpha,
-        "log": last_log,
+        "solver": "hard_coded_fgw_sinkhorn",
+        "tau_used": float(config.tau),
+        "epsilon_config": float(config.epsilon),
+        "alpha": float(config.alpha),
+        "fgw_objective": last_objective,
     }
 
 
@@ -758,16 +959,19 @@ def run_alignment_pipeline(
     if config.method == "gw":
         transport, transport_meta = solve_gw_transport(cost_var, cost_site, p, q, config)
     else:
-        cost_cross = build_cross_cost(
-            variable_signatures=variable_signatures,
-            site_signatures=site_signatures,
-            metric=config.geometry_metric,
-            normalize=config.normalize_cost_matrices,
-        )
+        if config.method in {"ot", "uot"}:
+            cost_cross = _squared_euclidean_cost(variable_signatures, site_signatures).detach().cpu().numpy()
+        else:
+            cost_cross = build_cross_cost(
+                variable_signatures=variable_signatures,
+                site_signatures=site_signatures,
+                metric=config.geometry_metric,
+                normalize=config.normalize_cost_matrices,
+            )
         if config.method == "ot":
-            transport, transport_meta = solve_ot_transport(cost_cross, p, q, config)
+            transport, transport_meta = solve_ot_transport(variable_signatures, site_signatures, config)
         elif config.method == "uot":
-            transport, transport_meta = solve_uot_transport(cost_cross, p, q, config)
+            transport, transport_meta = solve_uot_transport(variable_signatures, site_signatures, config)
         elif config.method == "fgw":
             transport, transport_meta = solve_fgw_transport(cost_cross, cost_var, cost_site, p, q, config)
         else:
