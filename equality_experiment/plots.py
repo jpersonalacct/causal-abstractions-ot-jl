@@ -16,18 +16,31 @@ from .constants import DEFAULT_TARGET_VARS
 from .runtime import ensure_parent_dir
 
 METHOD_PASTEL_COLORS = {
-    "das": "#a8d5ba",
-    "fgw": "#f6bd60",
-    "gw": "#9ecae1",
-    "ot": "#cdb4db",
+    "das": "#59a14f",
+    "fgw": "#f28e2b",
+    "gw": "#4e79a7",
+    "ot": "#b07aa1",
+    "uot": "#e15759",
 }
 
 DEFAULT_PASTEL_COLORS = (
-    "#9ecae1",
-    "#f6bd60",
-    "#a8d5ba",
-    "#cdb4db",
+    "#4e79a7",
+    "#f28e2b",
+    "#59a14f",
+    "#b07aa1",
+    "#e15759",
+    "#76b7b2",
 )
+
+
+def get_method_color(method: str, fallback_index: int) -> str:
+    """Return a stable per-method color, using a large categorical palette for unknown methods."""
+    normalized = str(method).lower()
+    explicit = METHOD_PASTEL_COLORS.get(normalized)
+    if explicit is not None:
+        return explicit
+    cmap = plt.get_cmap("tab20")
+    return matplotlib.colors.to_hex(cmap(int(fallback_index) % cmap.N))
 
 
 def _group_records(records: list[dict[str, object]], key: str) -> dict[str, dict[str, float]]:
@@ -70,7 +83,7 @@ def save_comparison_plots(
             x + (idx - (len(methods) - 1) / 2.0) * width,
             y,
             width=width,
-            color=METHOD_PASTEL_COLORS.get(method.lower(), DEFAULT_PASTEL_COLORS[idx % len(DEFAULT_PASTEL_COLORS)]),
+            color=get_method_color(method, idx),
             edgecolor="#6b7280",
             linewidth=0.8,
             label=method.upper(),

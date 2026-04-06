@@ -10,13 +10,13 @@ import numpy as np
 from equality_experiment.backbone import EqualityTrainConfig, load_backbone, train_backbone
 from equality_experiment.compare_runner import CompareExperimentConfig, run_comparison_with_banks
 from equality_experiment.pair_bank import build_pair_bank
-from equality_experiment.plots import DEFAULT_PASTEL_COLORS, METHOD_PASTEL_COLORS
+from equality_experiment.plots import get_method_color
 from equality_experiment.reporting import format_method_selection_summary, write_text_report
 from equality_experiment.runtime import ensure_parent_dir, resolve_device, write_json
 from equality_experiment.scm import load_equality_problem
 
 
-SEED = 42
+SEED = 1
 DEVICE = "cpu"
 RUN_TIMESTAMP = os.environ.get("RESULTS_TIMESTAMP") or datetime.now().strftime("%Y%m%d_%H%M%S")
 RUN_DIR = Path("results") / f"{RUN_TIMESTAMP}_equality"
@@ -25,7 +25,7 @@ OUTPUT_PATH = RUN_DIR / "equality_run_results.json"
 SUMMARY_PATH = RUN_DIR / "equality_run_summary.txt"
 RETRAIN_BACKBONE = False
 
-METHODS = ["ot", "uot", "das"]
+METHODS = ["ot"] #, "uot", "das"]
 TARGET_VARS = ["WX", "YZ"]
 TRANSPORT_METHODS = tuple(method for method in METHODS if method in {"ot", "uot", "gw", "fgw"})
 NON_TRANSPORT_METHODS = tuple(method for method in METHODS if method not in {"ot", "uot", "gw", "fgw"})
@@ -37,7 +37,7 @@ FACTUAL_TRAIN_SIZE = 1048576
 FACTUAL_VALIDATION_SIZE = 10000
 HIDDEN_DIMS = [16, 16, 16]
 LEARNING_RATE = 1e-3
-EPOCHS = 3
+EPOCHS = 10
 TRAIN_BATCH_SIZE = 1024
 EVAL_BATCH_SIZE = 1024
 
@@ -447,7 +447,7 @@ def _save_best_method_exact_plot(table_records: list[dict[str, object]], output_
             x + (idx - (len(methods) - 1) / 2.0) * width,
             y,
             width=width,
-            color=METHOD_PASTEL_COLORS.get(method, DEFAULT_PASTEL_COLORS[idx % len(DEFAULT_PASTEL_COLORS)]),
+            color=get_method_color(method, idx),
             edgecolor="#6b7280",
             linewidth=0.8,
             label=method.upper(),

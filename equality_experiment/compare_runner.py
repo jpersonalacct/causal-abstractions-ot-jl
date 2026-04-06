@@ -78,6 +78,46 @@ class CompareExperimentConfig:
     das_layers: tuple[int, ...] | None = None
 
 
+def _bank_metadata(bank_or_banks):
+    if isinstance(bank_or_banks, dict):
+        return {variable: bank.metadata() for variable, bank in bank_or_banks.items()}
+    return bank_or_banks.metadata()
+
+
+def _extend_bank_summary_lines(lines: list[str], bank_or_banks) -> None:
+    if isinstance(bank_or_banks, dict):
+        for variable, bank in bank_or_banks.items():
+            stats = dict(bank.pair_stats)
+            split = f"{bank.split}:{variable}"
+            lines.append(
+                f"{split} pair bank | total_pairs={int(stats.get('total_pairs', 0))} "
+                f"| changed_any={int(stats.get('changed_any_count', 0))} "
+                f"| unchanged_any={int(stats.get('unchanged_any_count', 0))}"
+            )
+            per_variable = dict(stats.get("per_variable", {}))
+            for stat_variable, variable_stats in per_variable.items():
+                lines.append(
+                    f"{split} pair bank [{stat_variable}] | changed={int(variable_stats.get('changed_count', 0))} "
+                    f"| unchanged={int(variable_stats.get('unchanged_count', 0))} "
+                    f"| changed_rate={float(variable_stats.get('changed_rate', 0.0)):.4f}"
+                )
+        return
+    stats = dict(bank_or_banks.pair_stats)
+    split = str(bank_or_banks.split)
+    lines.append(
+        f"{split} pair bank | total_pairs={int(stats.get('total_pairs', 0))} "
+        f"| changed_any={int(stats.get('changed_any_count', 0))} "
+        f"| unchanged_any={int(stats.get('unchanged_any_count', 0))}"
+    )
+    per_variable = dict(stats.get("per_variable", {}))
+    for variable, variable_stats in per_variable.items():
+        lines.append(
+            f"{split} pair bank [{variable}] | changed={int(variable_stats.get('changed_count', 0))} "
+            f"| unchanged={int(variable_stats.get('unchanged_count', 0))} "
+            f"| changed_rate={float(variable_stats.get('changed_rate', 0.0)):.4f}"
+        )
+
+
 def _build_summary_lines(
     config: CompareExperimentConfig,
     device,
@@ -89,44 +129,6 @@ def _build_summary_lines(
     method_runtime_seconds: dict[str, float],
     summary_records: list[dict[str, object]],
 ) -> tuple[list[str], dict[str, dict[str, object]]]:
-    def _bank_metadata(bank_or_banks):
-        if isinstance(bank_or_banks, dict):
-            return {variable: bank.metadata() for variable, bank in bank_or_banks.items()}
-        return bank_or_banks.metadata()
-
-    def _extend_bank_summary_lines(lines: list[str], bank_or_banks) -> None:
-        if isinstance(bank_or_banks, dict):
-            for variable, bank in bank_or_banks.items():
-                stats = dict(bank.pair_stats)
-                split = f"{bank.split}:{variable}"
-                lines.append(
-                    f"{split} pair bank | total_pairs={int(stats.get('total_pairs', 0))} "
-                    f"| changed_any={int(stats.get('changed_any_count', 0))} "
-                    f"| unchanged_any={int(stats.get('unchanged_any_count', 0))}"
-                )
-                per_variable = dict(stats.get("per_variable", {}))
-                for stat_variable, variable_stats in per_variable.items():
-                    lines.append(
-                        f"{split} pair bank [{stat_variable}] | changed={int(variable_stats.get('changed_count', 0))} "
-                        f"| unchanged={int(variable_stats.get('unchanged_count', 0))} "
-                        f"| changed_rate={float(variable_stats.get('changed_rate', 0.0)):.4f}"
-                    )
-            return
-        stats = dict(bank_or_banks.pair_stats)
-        split = str(bank_or_banks.split)
-        lines.append(
-            f"{split} pair bank | total_pairs={int(stats.get('total_pairs', 0))} "
-            f"| changed_any={int(stats.get('changed_any_count', 0))} "
-            f"| unchanged_any={int(stats.get('unchanged_any_count', 0))}"
-        )
-        per_variable = dict(stats.get("per_variable", {}))
-        for variable, variable_stats in per_variable.items():
-            lines.append(
-                f"{split} pair bank [{variable}] | changed={int(variable_stats.get('changed_count', 0))} "
-                f"| unchanged={int(variable_stats.get('unchanged_count', 0))} "
-                f"| changed_rate={float(variable_stats.get('changed_rate', 0.0)):.4f}"
-            )
-
     method_selections = {
         method: build_method_selection_summary(method, method_payloads[method])
         for method in config.methods
