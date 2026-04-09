@@ -81,8 +81,10 @@ def train_das_candidate(
                 base_position_by_id={key: value.detach().cpu() for key, value in batch["base_positions"].items()},
                 source_position_by_id={key: value.detach().cpu() for key, value in batch["source_positions"].items()},
                 symbol_token_ids=batch["symbol_token_ids"],
+                source_symbol_token_ids=batch["source_symbol_token_ids"],
                 canonical_answer_token_ids=bank.canonical_answer_token_ids,
                 answer_token_ids=batch["answer_token_id"].view(-1),
+                base_answer_token_ids=batch["base_answer_token_id"].view(-1),
                 changed_mask=torch.ones_like(batch["labels"], dtype=torch.bool),
                 expected_answer_texts=batch["expected_answer_text"],
             )

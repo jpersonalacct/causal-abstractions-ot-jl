@@ -93,8 +93,10 @@ class MCQAPairBank:
     base_position_by_id: dict[str, torch.Tensor]
     source_position_by_id: dict[str, torch.Tensor]
     symbol_token_ids: torch.Tensor
+    source_symbol_token_ids: torch.Tensor
     canonical_answer_token_ids: torch.Tensor
     answer_token_ids: torch.Tensor
+    base_answer_token_ids: torch.Tensor
     changed_mask: torch.Tensor
     expected_answer_texts: list[str]
 
@@ -130,7 +132,9 @@ class MCQAPairDataset(torch.utils.data.Dataset):
             "source_attention_mask": self.bank.source_attention_mask[index],
             "labels": self.bank.labels[index],
             "symbol_token_ids": self.bank.symbol_token_ids[index],
+            "source_symbol_token_ids": self.bank.source_symbol_token_ids[index],
             "answer_token_id": self.bank.answer_token_ids[index],
+            "base_answer_token_id": self.bank.base_answer_token_ids[index],
             "base_positions": {key: value[index] for key, value in self.bank.base_position_by_id.items()},
             "source_positions": {key: value[index] for key, value in self.bank.source_position_by_id.items()},
             "expected_answer_text": self.bank.expected_answer_texts[index],
@@ -369,12 +373,19 @@ def build_pair_banks(
             ],
             dtype=torch.long,
         )
+        source_symbol_token_ids = torch.tensor(
+            [
+                [_encode_symbol_token(str(source_input[f"symbol{index}"]), tokenizer) for index in range(4)]
+                for source_input in source_inputs
+            ],
+            dtype=torch.long,
+        )
         answer_token_ids = torch.tensor(
             [_encode_symbol_token(str(source_output["answer"]).strip(), tokenizer) for source_output in source_outputs],
             dtype=torch.long,
         )
-        answer_class_labels = torch.tensor(
-            [CANONICAL_ANSWER_LABELS.index(str(source_output["answer"]).strip()) for source_output in source_outputs],
+        base_answer_token_ids = torch.tensor(
+            [_encode_symbol_token(str(base_output["answer"]).strip(), tokenizer) for base_output in base_outputs],
             dtype=torch.long,
         )
         answer_pointer_labels = torch.tensor(
@@ -401,7 +412,7 @@ def build_pair_banks(
                 labels = answer_pointer_labels
                 changed_mask = changed_pointer
             elif target_var == "answer":
-                labels = answer_class_labels
+                labels = answer_pointer_labels
                 changed_mask = changed_answer
             else:
                 raise ValueError(f"Unsupported MCQA target variable {target_var}")
@@ -421,8 +432,10 @@ def build_pair_banks(
                 base_position_by_id=base_position_by_id,
                 source_position_by_id=source_position_by_id,
                 symbol_token_ids=symbol_token_ids,
+                source_symbol_token_ids=source_symbol_token_ids,
                 canonical_answer_token_ids=canonical_answer_token_ids,
                 answer_token_ids=answer_token_ids,
+                base_answer_token_ids=base_answer_token_ids,
                 changed_mask=changed_mask,
                 expected_answer_texts=[str(source_output["answer"]) for source_output in source_outputs],
             )
