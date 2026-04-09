@@ -466,7 +466,12 @@ def load_filtered_mcqa_pipeline(
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
     dtype = torch.float16 if torch_device.type in {"cuda", "mps"} else torch.float32
-    model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype, token=hf_token)
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=dtype,
+        token=hf_token,
+        attn_implementation="eager",
+    )
     model.to(torch_device)
     model.eval()
     print(f"[load] model and tokenizer ready dtype={dtype}")
