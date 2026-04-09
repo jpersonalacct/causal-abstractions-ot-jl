@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 import os
 
+from huggingface_hub import login as hf_login
+
 from mcqa_experiment.compare_runner import CompareExperimentConfig, run_comparison
 from mcqa_experiment.data import build_pair_banks, load_filtered_mcqa_pipeline
 from mcqa_experiment.runtime import resolve_device
@@ -16,6 +18,8 @@ OUTPUT_PATH = RUN_DIR / "mcqa_run_results.json"
 SUMMARY_PATH = RUN_DIR / "mcqa_run_summary.txt"
 
 MODEL_NAME = "google/gemma-2-2b"
+HF_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+PROMPT_HF_LOGIN = True
 METHODS = ["das", "ot"]
 TARGET_VARS = ["answer_pointer", "answer"]
 COUNTERFACTUAL_NAMES = ["answerPosition", "randomLetter", "answerPosition_randomLetter"]
@@ -43,13 +47,24 @@ DAS_LEARNING_RATE = 1e-3
 DAS_SUBSPACE_DIMS = [1, 4, 8, 16, 32]
 
 
+def ensure_hf_login(token: str | None, prompt_login: bool) -> str | None:
+    if token:
+        hf_login(token=token, add_to_git_credential=False)
+        return token
+    if prompt_login:
+        hf_login(add_to_git_credential=False)
+    return token
+
+
 def main() -> None:
     device = resolve_device(DEVICE)
+    hf_token = ensure_hf_login(HF_TOKEN, PROMPT_HF_LOGIN)
     model, tokenizer, causal_model, token_positions, filtered_datasets = load_filtered_mcqa_pipeline(
         model_name=MODEL_NAME,
         device=DEVICE,
         batch_size=BATCH_SIZE,
         dataset_size=DATASET_SIZE,
+        hf_token=hf_token,
     )
     banks_by_split, data_metadata = build_pair_banks(
         tokenizer=tokenizer,
