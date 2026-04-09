@@ -50,6 +50,8 @@ def build_rankings(transport: np.ndarray, sites: list[ResidualSite], ranking_k: 
             "site_label": sites[int(site_index)].label,
             "layer": int(sites[int(site_index)].layer),
             "token_position_id": str(sites[int(site_index)].token_position_id),
+            "dim_start": int(sites[int(site_index)].dim_start),
+            "dim_end": int(sites[int(site_index)].dim_end),
             "transport_mass": float(transport[0, int(site_index)]),
         }
         for site_index in order

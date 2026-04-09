@@ -9,35 +9,36 @@ from mcqa_experiment.data import build_pair_banks, load_filtered_mcqa_pipeline
 from mcqa_experiment.runtime import resolve_device
 
 
-DEVICE = "metal"
+DEVICE = "gpu"
 RUN_TIMESTAMP = os.environ.get("RESULTS_TIMESTAMP") or datetime.now().strftime("%Y%m%d_%H%M%S")
 RUN_DIR = Path("results") / f"{RUN_TIMESTAMP}_mcqa"
 OUTPUT_PATH = RUN_DIR / "mcqa_run_results.json"
 SUMMARY_PATH = RUN_DIR / "mcqa_run_summary.txt"
 
 MODEL_NAME = "google/gemma-2-2b"
-METHODS = ["ot", "uot", "das"]
+METHODS = ["das", "ot"]
 TARGET_VARS = ["answer_pointer", "answer"]
 COUNTERFACTUAL_NAMES = ["answerPosition", "randomLetter", "answerPosition_randomLetter"]
 
-LAYERS = None
-TOKEN_POSITION_IDS = None
+LAYERS = list(range(26))
+TOKEN_POSITION_IDS = ["correct_symbol", "correct_symbol_period", "last_token"]
 
 BATCH_SIZE = 8
-DATASET_SIZE = None
+DATASET_SIZE = None  # Use the full public HF train/validation/test splits before factual filtering.
 
-OT_EPSILONS = [1.0, 3.0, 10.0]
+RESOLUTION = 1 # gemma-2-2b has 2304 hidden layer size
+OT_EPSILONS = [1.0]
 OT_TAUS = [1.0]
 UOT_BETA_ABSTRACTS = [0.1, 1.0]
 UOT_BETA_NEURALS = [0.1, 1.0]
-SIGNATURE_MODES = ["whole_vocab_kl_t1", "answer_logit_delta"]
+SIGNATURE_MODES = ["whole_vocab_kl_t1"] #, "answer_logit_delta"]
 OT_TOP_K_VALUES = list(range(1, 11))
 OT_LAMBDAS = [round(value * 0.1, 1) for value in range(1, 31)]
 
-DAS_MAX_EPOCHS = 5
-DAS_MIN_EPOCHS = 1
-DAS_PLATEAU_PATIENCE = 2
-DAS_PLATEAU_REL_DELTA = 5e-3
+DAS_MAX_EPOCHS = 1000
+DAS_MIN_EPOCHS = 5
+DAS_PLATEAU_PATIENCE = 1
+DAS_PLATEAU_REL_DELTA = 1e-2
 DAS_LEARNING_RATE = 1e-3
 DAS_SUBSPACE_DIMS = [1, 4, 8, 16, 32]
 
@@ -81,6 +82,7 @@ def main() -> None:
                     das_plateau_rel_delta=DAS_PLATEAU_REL_DELTA,
                     das_learning_rate=DAS_LEARNING_RATE,
                     das_subspace_dims=tuple(DAS_SUBSPACE_DIMS),
+                    resolution=RESOLUTION,
                     layers=None if LAYERS is None else tuple(LAYERS),
                     token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
                 )
@@ -117,6 +119,7 @@ def main() -> None:
                             signature_mode=signature_mode,
                             ot_top_k_values=tuple(OT_TOP_K_VALUES),
                             ot_lambdas=tuple(OT_LAMBDAS),
+                            resolution=RESOLUTION,
                             layers=None if LAYERS is None else tuple(LAYERS),
                             token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
                         )

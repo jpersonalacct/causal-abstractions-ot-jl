@@ -36,6 +36,7 @@ class CompareExperimentConfig:
     das_plateau_rel_delta: float = 5e-3
     das_learning_rate: float = 1e-3
     das_subspace_dims: tuple[int, ...] | None = None
+    resolution: int | None = 1
     layers: tuple[int, ...] | None = None
     token_position_ids: tuple[str, ...] | None = None
 
@@ -51,9 +52,19 @@ def run_comparison(
     config: CompareExperimentConfig,
 ) -> dict[str, object]:
     token_position_ids = tuple(token_position.id for token_position in token_positions)
-    sites = enumerate_residual_sites(
+    ot_sites = enumerate_residual_sites(
         num_layers=int(model.config.num_hidden_layers),
+        hidden_size=int(model.config.hidden_size),
         token_position_ids=token_position_ids,
+        resolution=config.resolution,
+        layers=config.layers,
+        selected_token_position_ids=config.token_position_ids,
+    )
+    das_sites = enumerate_residual_sites(
+        num_layers=int(model.config.num_hidden_layers),
+        hidden_size=int(model.config.hidden_size),
+        token_position_ids=token_position_ids,
+        resolution=int(model.config.hidden_size),
         layers=config.layers,
         selected_token_position_ids=config.token_position_ids,
     )
@@ -71,7 +82,7 @@ def run_comparison(
                     fit_bank=train_bank,
                     calibration_bank=calibration_bank,
                     holdout_bank=test_bank,
-                    sites=sites,
+                    sites=ot_sites,
                     device=device,
                     tokenizer=tokenizer,
                     config=OTConfig(
@@ -92,7 +103,7 @@ def run_comparison(
                     train_bank=train_bank,
                     calibration_bank=calibration_bank,
                     holdout_bank=test_bank,
-                    sites=sites,
+                    sites=das_sites,
                     device=device,
                     tokenizer=tokenizer,
                     config=DASConfig(
@@ -127,8 +138,11 @@ def run_comparison(
         "ot_tau": float(config.ot_tau),
         "uot_beta_abstract": float(config.uot_beta_abstract),
         "uot_beta_neural": float(config.uot_beta_neural),
-        "num_candidate_sites": len(sites),
-        "candidate_sites": [site.label for site in sites],
+        "resolution": None if config.resolution is None else int(config.resolution),
+        "num_candidate_sites": len(ot_sites),
+        "candidate_sites": [site.label for site in ot_sites],
+        "num_das_candidate_sites": len(das_sites),
+        "das_candidate_sites": [site.label for site in das_sites],
         "data": data_metadata,
         "method_payloads": method_payloads,
         "results": all_records,

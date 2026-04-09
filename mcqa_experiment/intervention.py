@@ -136,7 +136,11 @@ def run_soft_residual_intervention(
                 source_positions = source_position_by_id[site.token_position_id].to(hidden.device)
                 base_vectors = hidden[batch_indices, base_positions]
                 source_vectors = source_hidden[batch_indices, source_positions]
-                hidden[batch_indices, base_positions] = base_vectors + float(strength) * float(weight) * (source_vectors - base_vectors)
+                delta = float(strength) * float(weight) * (source_vectors - base_vectors)
+                hidden[batch_indices, base_positions, int(site.dim_start) : int(site.dim_end)] = (
+                    base_vectors[:, int(site.dim_start) : int(site.dim_end)]
+                    + delta[:, int(site.dim_start) : int(site.dim_end)]
+                )
             if isinstance(output, tuple):
                 return (hidden, *output[1:])
             return hidden
