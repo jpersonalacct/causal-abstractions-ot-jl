@@ -323,27 +323,13 @@ def build_pair_banks(
     datasets_by_name: dict[str, list[dict[str, object]]],
     counterfactual_names: tuple[str, ...],
     target_vars: tuple[str, ...],
+    split_mode: str = "original",
+    split_ratios: tuple[float, float, float] = (0.7, 0.15, 0.15),
+    split_seed: int = 0,
 ) -> tuple[dict[str, dict[str, MCQAPairBank]], dict[str, object]]:
     """Build train/calibration/test banks for both target variables."""
     canonical_answer_token_ids = _validate_answer_tokenization(tokenizer)
-    split_map = {
-        "train": "train",
-        "validation": "calibration",
-        "test": "test",
-    }
-    banks_by_split: dict[str, dict[str, MCQAPairBank]] = {split: {} for split in split_map.values()}
-    for hf_split, output_split in split_map.items():
-        split_dataset_names = [
-            f"{counterfactual_name}_{hf_split}"
-            for counterfactual_name in counterfactual_names
-            if f"{counterfactual_name}_{hf_split}" in datasets_by_name
-        ]
-        combined_rows: list[dict[str, object]] = []
-        for dataset_name in split_dataset_names:
-            combined_rows.extend(datasets_by_name[dataset_name])
-        if not combined_rows:
-            raise ValueError(f"No MCQA rows found for split {hf_split}")
-
+    def make_bank(output_split: str, split_dataset_names: list[str], combined_rows: list[dict[str, object]]) -> dict[str, MCQAPairBank]:
         base_inputs = [row["input"] for row in combined_rows]
         source_inputs = [row["counterfactual_inputs"][0] for row in combined_rows]
         base_outputs = [causal_model.run_forward(base_input) for base_input in base_inputs]
@@ -408,7 +394,7 @@ def build_pair_banks(
             ],
             dtype=torch.bool,
         )
-
+        banks: dict[str, MCQAPairBank] = {}
         for target_var in target_vars:
             if target_var == "answer_pointer":
                 labels = answer_pointer_labels
@@ -418,7 +404,7 @@ def build_pair_banks(
                 changed_mask = changed_answer
             else:
                 raise ValueError(f"Unsupported MCQA target variable {target_var}")
-            banks_by_split[output_split][target_var] = MCQAPairBank(
+            banks[target_var] = MCQAPairBank(
                 split=output_split,
                 target_var=target_var,
                 dataset_names=tuple(split_dataset_names),
@@ -441,6 +427,58 @@ def build_pair_banks(
                 changed_mask=changed_mask,
                 expected_answer_texts=[str(source_output["answer"]) for source_output in source_outputs],
             )
+        return banks
+
+    banks_by_split: dict[str, dict[str, MCQAPairBank]] = {"train": {}, "calibration": {}, "test": {}}
+    if split_mode == "original":
+        split_map = {
+            "train": "train",
+            "validation": "calibration",
+            "test": "test",
+        }
+        for hf_split, output_split in split_map.items():
+            split_dataset_names = [
+                f"{counterfactual_name}_{hf_split}"
+                for counterfactual_name in counterfactual_names
+                if f"{counterfactual_name}_{hf_split}" in datasets_by_name
+            ]
+            combined_rows: list[dict[str, object]] = []
+            for dataset_name in split_dataset_names:
+                combined_rows.extend(datasets_by_name[dataset_name])
+            if not combined_rows:
+                raise ValueError(f"No MCQA rows found for split {hf_split}")
+            banks_by_split[output_split] = make_bank(output_split, split_dataset_names, combined_rows)
+    elif split_mode == "pooled":
+        pooled_dataset_names = []
+        pooled_rows: list[dict[str, object]] = []
+        for hf_split in ("train", "validation", "test"):
+            for counterfactual_name in counterfactual_names:
+                dataset_name = f"{counterfactual_name}_{hf_split}"
+                if dataset_name in datasets_by_name:
+                    pooled_dataset_names.append(dataset_name)
+                    pooled_rows.extend(datasets_by_name[dataset_name])
+        if not pooled_rows:
+            raise ValueError("No MCQA rows found for pooled split mode")
+        ratios = tuple(float(value) for value in split_ratios)
+        if len(ratios) != 3 or abs(sum(ratios) - 1.0) > 1e-6:
+            raise ValueError(f"split_ratios must be length 3 and sum to 1.0, got {split_ratios}")
+        rng = random.Random(int(split_seed))
+        shuffled_rows = list(pooled_rows)
+        rng.shuffle(shuffled_rows)
+        total = len(shuffled_rows)
+        train_end = int(total * ratios[0])
+        calibration_end = train_end + int(total * ratios[1])
+        split_rows = {
+            "train": shuffled_rows[:train_end],
+            "calibration": shuffled_rows[train_end:calibration_end],
+            "test": shuffled_rows[calibration_end:],
+        }
+        for output_split, combined_rows in split_rows.items():
+            if not combined_rows:
+                raise ValueError(f"No MCQA rows found for pooled output split {output_split}")
+            banks_by_split[output_split] = make_bank(output_split, pooled_dataset_names, combined_rows)
+    else:
+        raise ValueError(f"Unsupported split_mode {split_mode}")
     metadata = {
         split: {target_var: bank.metadata() for target_var, bank in banks.items()}
         for split, banks in banks_by_split.items()

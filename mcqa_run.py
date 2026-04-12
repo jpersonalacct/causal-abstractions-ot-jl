@@ -24,11 +24,14 @@ PROMPT_HF_LOGIN = True
 METHODS = ["das"] #, "ot"]
 TARGET_VARS = ["answer_pointer"] #, "answer"]
 COUNTERFACTUAL_NAMES = ["answerPosition", "randomLetter", "answerPosition_randomLetter"]
+SPLIT_MODE = "pooled"  # "original" keeps HF train/validation/test; "pooled" repartitions filtered rows by ratio.
+SPLIT_RATIOS = (0.7, 0.15, 0.15)
+SPLIT_SEED = 0
 
 LAYERS = "auto"
 TOKEN_POSITION_IDS = ["last_token"] # "correct_symbol", "correct_symbol_period", 
 
-BATCH_SIZE = 32
+BATCH_SIZE = 32 
 DATASET_SIZE = None  # Use the full public HF train/validation/test splits before factual filtering.
 
 RESOLUTION = 64 # gemma-2-2b has 2304 hidden layer size
@@ -76,6 +79,9 @@ def main() -> None:
         datasets_by_name=filtered_datasets,
         counterfactual_names=tuple(COUNTERFACTUAL_NAMES),
         target_vars=tuple(TARGET_VARS),
+        split_mode=SPLIT_MODE,
+        split_ratios=SPLIT_RATIOS,
+        split_seed=SPLIT_SEED,
     )
     print(f"[run] built splits={list(banks_by_split.keys())}")
     for split in SPLIT_PRINT_ORDER:

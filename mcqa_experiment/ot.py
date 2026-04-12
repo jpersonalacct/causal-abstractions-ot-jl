@@ -402,12 +402,6 @@ def _select_hyperparameters(
             "exact_acc": float(result["exact_acc"]),
         }
         sweep_records.append(candidate)
-        if config.selection_verbose:
-            print(
-                f"[{config.method.upper()}] variable={calibration_bank.target_var} "
-                f"top_k={int(top_k)} lambda={float(strength):g} "
-                f"calibration_exact_acc={float(candidate['exact_acc']):.4f}"
-            )
         if best is None or float(candidate["exact_acc"]) > float(best["exact_acc"]):
             best = candidate
             if config.selection_verbose:
@@ -418,6 +412,12 @@ def _select_hyperparameters(
                 )
     if best is None:
         raise RuntimeError(f"Failed to select OT/UOT hyperparameters for {calibration_bank.target_var}")
+    if config.selection_verbose:
+        print(
+            f"[{config.method.upper()}] selected variable={calibration_bank.target_var} "
+            f"top_k={int(best['top_k'])} lambda={float(best['lambda']):g} "
+            f"calibration_exact_acc={float(best['exact_acc']):.4f}"
+        )
     return best, sweep_records
 
 
