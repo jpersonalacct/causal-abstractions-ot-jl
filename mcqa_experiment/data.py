@@ -17,6 +17,7 @@ from .runtime import resolve_device
 
 DATASET_PATH = os.environ.get("MCQA_DATASET_PATH", "mib-bench/copycolors_mcqa")
 DATASET_NAME = os.environ.get("MCQA_DATASET_CONFIG", "4_answer_choices")
+_DATASET_CONFIG_UNSET = object()
 
 CANONICAL_ANSWER_STRINGS = (" A", " B", " C", " D")
 CANONICAL_ANSWER_LABELS = ("A", "B", "C", "D")
@@ -211,11 +212,11 @@ def _load_counterfactual_rows(
     size: int | None = None,
     hf_token: str | None = None,
     dataset_path: str | None = None,
-    dataset_name: str | None = None,
+    dataset_name: str | None | object = _DATASET_CONFIG_UNSET,
 ) -> dict[str, list[dict[str, object]]]:
     token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     resolved_dataset_path = dataset_path or DATASET_PATH
-    resolved_dataset_name = dataset_name if dataset_name is not None else DATASET_NAME
+    resolved_dataset_name = DATASET_NAME if dataset_name is _DATASET_CONFIG_UNSET else dataset_name
     dataset_path_obj = Path(resolved_dataset_path)
     if dataset_path_obj.exists():
         split_file = dataset_path_obj / f"{split}.jsonl"
@@ -258,12 +259,12 @@ def load_public_mcqa_datasets(
     size: int | None = None,
     hf_token: str | None = None,
     dataset_path: str | None = None,
-    dataset_name: str | None = None,
+    dataset_name: str | None | object = _DATASET_CONFIG_UNSET,
 ) -> dict[str, list[dict[str, object]]]:
     """Load public train/validation/test MCQA splits in the copied MIB structure."""
     datasets: dict[str, list[dict[str, object]]] = {}
     resolved_dataset_path = dataset_path or DATASET_PATH
-    resolved_dataset_name = dataset_name if dataset_name is not None else DATASET_NAME
+    resolved_dataset_name = DATASET_NAME if dataset_name is _DATASET_CONFIG_UNSET else dataset_name
     dataset_path_obj = Path(resolved_dataset_path)
     if dataset_path_obj.exists():
         candidate_splits = tuple(
@@ -519,7 +520,7 @@ def load_filtered_mcqa_pipeline(
     dataset_size: int | None = None,
     hf_token: str | None = None,
     dataset_path: str | None = None,
-    dataset_name: str | None = None,
+    dataset_name: str | None | object = _DATASET_CONFIG_UNSET,
 ) -> tuple[object, object, MCQACausalModel, list[TokenPosition], dict[str, list[dict[str, object]]]]:
     """Load Gemma-2-2B, copy the MCQA task setup, and filter to correct examples."""
     import transformers
@@ -544,7 +545,7 @@ def load_filtered_mcqa_pipeline(
     token_positions = get_token_positions(tokenizer, causal_model)
     print(f"[load] token_positions={[token_position.id for token_position in token_positions]}")
     resolved_dataset_path = dataset_path or DATASET_PATH
-    resolved_dataset_name = dataset_name if dataset_name is not None else DATASET_NAME
+    resolved_dataset_name = DATASET_NAME if dataset_name is _DATASET_CONFIG_UNSET else dataset_name
     print(
         f"[load] loading MCQA datasets path={resolved_dataset_path} "
         f"config={resolved_dataset_name!r} size_cap={dataset_size}"
