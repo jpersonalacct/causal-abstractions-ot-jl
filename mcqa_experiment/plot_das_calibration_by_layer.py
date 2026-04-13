@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 
-INPUT_PATH = Path("results/4-9 mcqa gemma-2/20260409_144935_mcqa/mcqa_sig-whole_vocab_kl_t1_eps-1_tau-1.json")
+INPUT_PATH = Path("results/4-9 mcqa gemma-2/20260409_144935_mcqa/mcqa_sig-whole_vocab_kl_t1_eps-1.json")
 OUTPUT_PATH = INPUT_PATH.with_name("das_answer_pointer_calibration_heatmap.svg")
 TARGET_VAR = "answer_pointer"
 

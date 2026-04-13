@@ -191,7 +191,6 @@ class OTConfig:
     method: str = "ot"
     batch_size: int = 16
     epsilon: float = 1.0
-    tau: float = 1.0
     uot_beta_abstract: float = 1.0
     uot_beta_neural: float = 1.0
     max_iter: int = 500
@@ -242,21 +241,18 @@ def solve_ot_transport(variable_signature: torch.Tensor, site_signatures: torch.
     cost_cross = _squared_euclidean_cost(variable_signature, site_signatures).detach().cpu().numpy()
     p = np.ones(variable_signature.shape[0], dtype=np.float64) / float(variable_signature.shape[0])
     q = np.ones(site_signatures.shape[0], dtype=np.float64) / float(site_signatures.shape[0])
-    temperature = float(config.tau)
-    regularization = float(config.epsilon) * temperature
     transport_tensor, transport_cost = sinkhorn_uniform_ot(
         variable_signature,
         site_signatures,
         epsilon=float(config.epsilon),
         n_iter=int(config.max_iter),
-        temperature=temperature,
+        temperature=1.0,
         tol=float(config.tol),
     )
     transport = transport_tensor.detach().cpu().numpy()
     meta = {
         "method": "ot",
-        "regularization_used": regularization,
-        "tau_used": temperature,
+        "regularization_used": float(config.epsilon),
         "epsilon_config": float(config.epsilon),
         "transport_cost": float(transport_cost),
         **_transport_validation_stats(transport, p, q),
@@ -270,22 +266,19 @@ def solve_ot_transport(variable_signature: torch.Tensor, site_signatures: torch.
 def solve_uot_transport(variable_signature: torch.Tensor, site_signatures: torch.Tensor, config: OTConfig) -> tuple[np.ndarray, dict[str, object]]:
     variable_signature = variable_signature.reshape(1, -1)
     site_signatures = site_signatures.reshape(site_signatures.shape[0], -1)
-    temperature = float(config.tau)
-    regularization = float(config.epsilon) * temperature
     transport_tensor, info = sinkhorn_unbalanced_ot(
         variable_signature,
         site_signatures,
         epsilon=float(config.epsilon),
         n_iter=int(config.max_iter),
-        temperature=temperature,
+        temperature=1.0,
         tau_abstract=float(config.uot_beta_abstract),
         tau_neural=float(config.uot_beta_neural),
     )
     transport = transport_tensor.detach().cpu().numpy()
     meta = {
         "method": "uot",
-        "regularization_used": regularization,
-        "tau_used": temperature,
+        "regularization_used": float(config.epsilon),
         "uot_beta_abstract": float(config.uot_beta_abstract),
         "uot_beta_neural": float(config.uot_beta_neural),
         "epsilon_config": float(config.epsilon),
@@ -438,7 +431,7 @@ def run_alignment_pipeline(
         print(
             f"[{config.method.upper()}] start variable={fit_bank.target_var} "
             f"signature_mode={config.signature_mode} candidate_sites={len(sites)} "
-            f"epsilon={float(config.epsilon):g} tau={float(config.tau):g}"
+            f"epsilon={float(config.epsilon):g}"
         )
     base_logits = collect_base_logits(model=model, bank=fit_bank, batch_size=config.batch_size, device=device)
     site_signatures = collect_site_signatures(

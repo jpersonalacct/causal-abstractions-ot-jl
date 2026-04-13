@@ -41,7 +41,6 @@ BATCH_SIZE = 32
 
 RESOLUTION = 64 # gemma-2-2b has 2304 hidden layer size
 OT_EPSILONS = [1.0]
-OT_TAUS = [1.0]
 UOT_BETA_ABSTRACTS = [0.1, 1.0]
 UOT_BETA_NEURALS = [0.1, 1.0]
 SIGNATURE_MODES = ["whole_vocab_kl_t1"] #, "answer_logit_delta"]
@@ -112,79 +111,76 @@ def main() -> None:
     all_payloads = []
     for signature_mode in SIGNATURE_MODES:
         for epsilon in OT_EPSILONS:
-            for tau in OT_TAUS:
-                methods = tuple(method for method in METHODS if method != "uot")
-                config = CompareExperimentConfig(
-                    model_name=MODEL_NAME,
-                    output_path=RUN_DIR / f"mcqa_sig-{signature_mode}_eps-{epsilon:g}_tau-{tau:g}.json",
-                    summary_path=RUN_DIR / f"mcqa_sig-{signature_mode}_eps-{epsilon:g}_tau-{tau:g}.txt",
-                    methods=methods,
-                    target_vars=tuple(TARGET_VARS),
-                    batch_size=BATCH_SIZE,
-                    ot_epsilon=float(epsilon),
-                    ot_tau=float(tau),
-                    signature_mode=signature_mode,
-                    ot_top_k_values=tuple(OT_TOP_K_VALUES),
-                    ot_lambdas=tuple(OT_LAMBDAS),
-                    das_max_epochs=DAS_MAX_EPOCHS,
-                    das_min_epochs=DAS_MIN_EPOCHS,
-                    das_plateau_patience=DAS_PLATEAU_PATIENCE,
-                    das_plateau_rel_delta=DAS_PLATEAU_REL_DELTA,
-                    das_learning_rate=DAS_LEARNING_RATE,
-                    das_subspace_dims=tuple(DAS_SUBSPACE_DIMS),
-                    resolution=RESOLUTION,
-                    layers=tuple(selected_layers),
-                    token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
+            methods = tuple(method for method in METHODS if method != "uot")
+            config = CompareExperimentConfig(
+                model_name=MODEL_NAME,
+                output_path=RUN_DIR / f"mcqa_sig-{signature_mode}_eps-{epsilon:g}.json",
+                summary_path=RUN_DIR / f"mcqa_sig-{signature_mode}_eps-{epsilon:g}.txt",
+                methods=methods,
+                target_vars=tuple(TARGET_VARS),
+                batch_size=BATCH_SIZE,
+                ot_epsilon=float(epsilon),
+                signature_mode=signature_mode,
+                ot_top_k_values=tuple(OT_TOP_K_VALUES),
+                ot_lambdas=tuple(OT_LAMBDAS),
+                das_max_epochs=DAS_MAX_EPOCHS,
+                das_min_epochs=DAS_MIN_EPOCHS,
+                das_plateau_patience=DAS_PLATEAU_PATIENCE,
+                das_plateau_rel_delta=DAS_PLATEAU_REL_DELTA,
+                das_learning_rate=DAS_LEARNING_RATE,
+                das_subspace_dims=tuple(DAS_SUBSPACE_DIMS),
+                resolution=RESOLUTION,
+                layers=tuple(selected_layers),
+                token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
+            )
+            all_payloads.append(
+                run_comparison(
+                    model=model,
+                    tokenizer=tokenizer,
+                    token_positions=token_positions,
+                    banks_by_split=banks_by_split,
+                    data_metadata=data_metadata,
+                    device=device,
+                    config=config,
                 )
-                all_payloads.append(
-                    run_comparison(
-                        model=model,
-                        tokenizer=tokenizer,
-                        token_positions=token_positions,
-                        banks_by_split=banks_by_split,
-                        data_metadata=data_metadata,
-                        device=device,
-                        config=config,
-                    )
-                )
-                if "uot" in METHODS:
-                    for beta_abstract in UOT_BETA_ABSTRACTS:
-                        for beta_neural in UOT_BETA_NEURALS:
-                            uot_config = CompareExperimentConfig(
-                                model_name=MODEL_NAME,
-                                output_path=RUN_DIR / (
-                                    f"mcqa_uot_sig-{signature_mode}_eps-{epsilon:g}_tau-{tau:g}_"
-                                    f"ba-{beta_abstract:g}_bn-{beta_neural:g}.json"
-                                ),
-                                summary_path=RUN_DIR / (
-                                    f"mcqa_uot_sig-{signature_mode}_eps-{epsilon:g}_tau-{tau:g}_"
-                                    f"ba-{beta_abstract:g}_bn-{beta_neural:g}.txt"
-                                ),
-                                methods=("uot",),
-                                target_vars=tuple(TARGET_VARS),
-                                batch_size=BATCH_SIZE,
-                                ot_epsilon=float(epsilon),
-                                ot_tau=float(tau),
-                                uot_beta_abstract=float(beta_abstract),
-                                uot_beta_neural=float(beta_neural),
-                                signature_mode=signature_mode,
-                                ot_top_k_values=tuple(OT_TOP_K_VALUES),
-                                ot_lambdas=tuple(OT_LAMBDAS),
-                                resolution=RESOLUTION,
-                                layers=tuple(selected_layers),
-                                token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
+            )
+            if "uot" in METHODS:
+                for beta_abstract in UOT_BETA_ABSTRACTS:
+                    for beta_neural in UOT_BETA_NEURALS:
+                        uot_config = CompareExperimentConfig(
+                            model_name=MODEL_NAME,
+                            output_path=RUN_DIR / (
+                                f"mcqa_uot_sig-{signature_mode}_eps-{epsilon:g}_"
+                                f"ba-{beta_abstract:g}_bn-{beta_neural:g}.json"
+                            ),
+                            summary_path=RUN_DIR / (
+                                f"mcqa_uot_sig-{signature_mode}_eps-{epsilon:g}_"
+                                f"ba-{beta_abstract:g}_bn-{beta_neural:g}.txt"
+                            ),
+                            methods=("uot",),
+                            target_vars=tuple(TARGET_VARS),
+                            batch_size=BATCH_SIZE,
+                            ot_epsilon=float(epsilon),
+                            uot_beta_abstract=float(beta_abstract),
+                            uot_beta_neural=float(beta_neural),
+                            signature_mode=signature_mode,
+                            ot_top_k_values=tuple(OT_TOP_K_VALUES),
+                            ot_lambdas=tuple(OT_LAMBDAS),
+                            resolution=RESOLUTION,
+                            layers=tuple(selected_layers),
+                            token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
+                        )
+                        all_payloads.append(
+                            run_comparison(
+                                model=model,
+                                tokenizer=tokenizer,
+                                token_positions=token_positions,
+                                banks_by_split=banks_by_split,
+                                data_metadata=data_metadata,
+                                device=device,
+                                config=uot_config,
                             )
-                            all_payloads.append(
-                                run_comparison(
-                                    model=model,
-                                    tokenizer=tokenizer,
-                                    token_positions=token_positions,
-                                    banks_by_split=banks_by_split,
-                                    data_metadata=data_metadata,
-                                    device=device,
-                                    config=uot_config,
-                                )
-                            )
+                        )
     from mcqa_experiment.runtime import write_json
 
     write_json(OUTPUT_PATH, {"runs": all_payloads})

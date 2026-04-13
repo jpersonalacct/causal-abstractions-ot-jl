@@ -25,7 +25,6 @@ class CompareExperimentConfig:
     target_vars: tuple[str, ...] = ("answer_pointer", "answer")
     batch_size: int = 16
     ot_epsilon: float = 1.0
-    ot_tau: float = 1.0
     uot_beta_abstract: float = 1.0
     uot_beta_neural: float = 1.0
     signature_mode: str = "answer_logit_delta"
@@ -93,7 +92,6 @@ def run_comparison(
                         method=method,
                         batch_size=config.batch_size,
                         epsilon=config.ot_epsilon,
-                        tau=config.ot_tau,
                         uot_beta_abstract=config.uot_beta_abstract,
                         uot_beta_neural=config.uot_beta_neural,
                         signature_mode=config.signature_mode,
@@ -146,7 +144,6 @@ def run_comparison(
         "target_vars": list(config.target_vars),
         "signature_mode": config.signature_mode,
         "ot_epsilon": float(config.ot_epsilon),
-        "ot_tau": float(config.ot_tau),
         "uot_beta_abstract": float(config.uot_beta_abstract),
         "uot_beta_neural": float(config.uot_beta_neural),
         "resolution": None if config.resolution is None else int(config.resolution),
