@@ -21,20 +21,23 @@ SPLIT_PRINT_ORDER = ("train", "calibration", "test")
 MODEL_NAME = "google/gemma-2-2b"
 HF_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
 PROMPT_HF_LOGIN = True
+
+# Data
 MCQA_DATASET_PATH = "jchang153/copycolors_mcqa"
 MCQA_DATASET_CONFIG = None
+DATASET_SIZE = None  # Cap raw rows loaded from the dataset before factual filtering.
+SPLIT_RATIOS = (0.7, 0.15, 0.15)  # Applied after filtering to the retained pooled rows.
+SPLIT_SEED = 0
+
+# Experiment
 METHODS = ["das"] #, "ot"]
 TARGET_VARS = ["answer_pointer"] #, "answer"]
 COUNTERFACTUAL_NAMES = ["answerPosition", "randomLetter", "answerPosition_randomLetter"]
-SPLIT_RATIOS = (0.7, 0.15, 0.15)
-SPLIT_SEED = 0
-POOLED_TOTAL_EXAMPLES = None  # Optional cap on the total number of filtered pooled rows before repartitioning.
 
 LAYERS = "auto"
 TOKEN_POSITION_IDS = ["last_token"] # "correct_symbol", "correct_symbol_period", 
 
 BATCH_SIZE = 32 
-DATASET_SIZE = None  # Use the full public HF train/validation/test splits before factual filtering.
 
 RESOLUTION = 64 # gemma-2-2b has 2304 hidden layer size
 OT_EPSILONS = [1.0]
@@ -85,7 +88,6 @@ def main() -> None:
         target_vars=tuple(TARGET_VARS),
         split_ratios=SPLIT_RATIOS,
         split_seed=SPLIT_SEED,
-        pooled_total_examples=POOLED_TOTAL_EXAMPLES,
     )
     print(f"[run] built splits={list(banks_by_split.keys())}")
     for split in SPLIT_PRINT_ORDER:
