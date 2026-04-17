@@ -7,6 +7,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib.colors import FuncNorm
+from matplotlib.patches import Patch
+from PIL import Image
 
 from equality_experiment.backbone import EqualityTrainConfig, load_backbone, train_backbone
 from equality_experiment.compare_runner import CompareExperimentConfig, run_comparison_with_banks
@@ -17,7 +20,7 @@ from equality_experiment.runtime import ensure_parent_dir, resolve_device, write
 from equality_experiment.scm import load_equality_problem
 
 
-SEEDS = [1]
+SEEDS = [i for i in range(1,11)]
 DEVICE = "cpu"
 RUN_TIMESTAMP = os.environ.get("RESULTS_TIMESTAMP") or datetime.now().strftime("%Y%m%d_%H%M%S")
 RUN_DIR = Path("results") / f"{RUN_TIMESTAMP}_equality"
@@ -25,10 +28,13 @@ OUTPUT_PATH = RUN_DIR / "equality_run_results.json"
 SUMMARY_PATH = RUN_DIR / "equality_run_summary.txt"
 RETRAIN_BACKBONE = False
 
-METHODS = ["ot","uot","das"]
+METHODS = ["ot", "das"]
 TARGET_VARS = ["WX", "YZ"]
 TRANSPORT_METHODS = tuple(method for method in METHODS if method in {"ot", "uot", "gw", "fgw"})
 NON_TRANSPORT_METHODS = tuple(method for method in METHODS if method not in {"ot", "uot", "gw", "fgw"})
+HEQ_METHOD_ORDER = ("ot", "uot", "das")
+HEQ_METHOD_LABELS = {"ot": "OT", "uot": "UOT", "das": "DAS"}
+HEQ_METHOD_COLORS = {"ot": "#59a14f", "uot": "#76b7b2", "das": "#e15759"}
 
 NUM_ENTITIES = 100
 EMBEDDING_DIM = 4
@@ -43,7 +49,7 @@ EVAL_BATCH_SIZE = 1024
 
 TRAIN_PAIR_SIZE = 1000
 CALIBRATION_PAIR_SIZE = 1000
-TEST_PAIR_SIZE = 5000
+TEST_PAIR_SIZE = 1000
 
 # `*_PAIR_POLICY_TARGET` can be one of:
 #   - "any", "WX", "YZ", "both", "C1_only", "C2_only"
@@ -63,7 +69,7 @@ CALIBRATION_PAIR_POOL_SIZE = 2048
 # - "separate_variable_positive": separate calibration banks for WX and YZ, each containing pairs where that variable is sensitive.
 # - "separate_variable_only": separate calibration banks containing WX-sensitive/YZ-invariant pairs and YZ-sensitive/WX-invariant pairs, respectively.
 # - "sensitive_test_eval": separate calibration banks for WX and YZ using the sensitive-test settings below.
-CALIBRATION_STRATEGY = "shared_balanced_wx_yz_only"
+CALIBRATION_STRATEGY = "shared_balanced_wx_yz_only"  # "shared_any_mixed50"
 
 SENSITIVE_TEST_EVAL = True
 SENSITIVE_TEST_PAIR_POLICY = "mixed"
@@ -80,7 +86,7 @@ BATCH_SIZE = 128
 RESOLUTION = 1
 FGW_ALPHA = 0.5
 TRANSPORT_SOLVER_BACKEND = "custom"  # "custom" or "pot"
-OT_EPSILONS = [5, 10, 20, 30] # [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
+OT_EPSILONS = [i for i in range(1,31)] # [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
 OT_TAUS = [1.0]
 UOT_BETA_ABSTRACTS = [1e6]
 UOT_BETA_NEURALS = [0.05, 0.1, 0.5, 1.0, 5.0, 10.0]
@@ -91,7 +97,7 @@ OT_LAMBDAS = [i for i in range(1, 81)]
 
 DAS_MAX_EPOCHS = 1000
 DAS_MIN_EPOCHS = 5
-DAS_PLATEAU_PATIENCE = 1
+DAS_PLATEAU_PATIENCE = 3
 DAS_PLATEAU_REL_DELTA = 1e-2
 DAS_LEARNING_RATE = 1e-3
 DAS_SUBSPACE_DIMS = [i+1 for i in range(16)]
@@ -719,6 +725,415 @@ def _save_best_method_exact_plot(table_records: list[dict[str, object]], output_
     return str(output_path)
 
 
+def _plot_heq_joint_accuracy(seed_payload: dict[str, object], output_path: Path) -> None:
+    """Render the paper-style per-seed accuracy comparison chart."""
+    methods = [method for method in HEQ_METHOD_ORDER if method in seed_payload.get("best_method_runs", {})]
+    if not methods:
+        return
+
+    x = np.arange(len(methods), dtype=float) * 0.72
+    width = 0.12
+    offsets = np.array([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=float) * width
+    variable_palette = {
+        "WX": {"sensitive": "#2f6ea6", "invariant": "#9ecae1"},
+        "YZ": {"sensitive": "#c4473a", "invariant": "#f4a6a0"},
+    }
+    average_color = "#59a14f"
+
+    fig, ax = plt.subplots(figsize=(9.6, 3.8), constrained_layout=True)
+    for method_idx, method in enumerate(methods):
+        comparison = seed_payload["best_method_runs"][method]["comparison"]
+        variable_results = {
+            str(record["variable"]): record
+            for record in comparison["method_payloads"][method]["results"]
+        }
+        summary = next(
+            (
+                record
+                for record in comparison.get("method_summary", [])
+                if str(record.get("method")) == method
+            ),
+            {},
+        )
+        heights = [
+            float(variable_results["WX"].get("exact_acc", 0.0)),
+            float(variable_results["WX"].get("invariant_exact_acc", 0.0)),
+            float(variable_results["YZ"].get("exact_acc", 0.0)),
+            float(variable_results["YZ"].get("invariant_exact_acc", 0.0)),
+            0.5
+            * (
+                float(summary.get("exact_acc", 0.0))
+                + float(summary.get("invariant_exact_acc", 0.0))
+            ),
+        ]
+        colors = [
+            variable_palette["WX"]["sensitive"],
+            variable_palette["WX"]["invariant"],
+            variable_palette["YZ"]["sensitive"],
+            variable_palette["YZ"]["invariant"],
+            average_color,
+        ]
+        for height, offset, color in zip(heights, offsets, colors):
+            ax.bar(
+                x[method_idx] + offset,
+                height,
+                width=width,
+                color=color,
+                edgecolor="none",
+                linewidth=0.0,
+            )
+
+    ax.set_title("HEQ: Equality Run Accuracy")
+    ax.set_ylabel("Exact Accuracy")
+    ax.set_xticks(x, [HEQ_METHOD_LABELS[method] for method in methods])
+    ax.set_xlim(x[0] - 0.34, x[-1] + 0.34)
+    ax.set_ylim(0.90, 1.01)
+    ax.grid(axis="y", alpha=0.22)
+    ax.legend(
+        handles=[
+            Patch(facecolor=variable_palette["WX"]["sensitive"], label=r"$z_{WX}$ sensitive"),
+            Patch(facecolor=variable_palette["WX"]["invariant"], label=r"$z_{WX}$ invariant"),
+            Patch(facecolor=variable_palette["YZ"]["sensitive"], label=r"$z_{YZ}$ sensitive"),
+            Patch(facecolor=variable_palette["YZ"]["invariant"], label=r"$z_{YZ}$ invariant"),
+            Patch(facecolor=average_color, label="Average"),
+        ],
+        frameon=False,
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        ncol=1,
+        fontsize=8,
+        handlelength=1.2,
+        handletextpad=0.5,
+        borderpad=0.2,
+        labelspacing=0.3,
+    )
+    ensure_parent_dir(output_path)
+    fig.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_heq_joint_runtime(seed_payload: dict[str, object], output_path: Path) -> None:
+    """Render the per-seed runtime comparison chart."""
+    methods = [method for method in HEQ_METHOD_ORDER if method in seed_payload.get("best_method_runs", {})]
+    if not methods:
+        return
+
+    runtimes = np.array(
+        [
+            float(seed_payload["best_method_runs"][method]["comparison"]["method_runtime_seconds"][method])
+            for method in methods
+        ],
+        dtype=float,
+    )
+    fig, ax = plt.subplots(figsize=(6.0, 3.45), constrained_layout=True)
+    ax.bar(
+        np.arange(len(methods)),
+        runtimes,
+        color=[HEQ_METHOD_COLORS[method] for method in methods],
+        alpha=0.97,
+    )
+    ax.set_title("HEQ: Equality Run Runtime")
+    ax.set_ylabel("Runtime (sec)")
+    ax.set_xticks(np.arange(len(methods)), [HEQ_METHOD_LABELS[method] for method in methods])
+    ax.grid(axis="y", alpha=0.22)
+    ensure_parent_dir(output_path)
+    fig.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _make_tail_detail_norm(exponent: float = 0.68) -> FuncNorm:
+    """Increase visual contrast in both tails of a unit-interval heatmap."""
+
+    def forward(values):
+        values = np.asarray(values, dtype=float)
+        clipped = np.clip(values, 0.0, 1.0)
+        mapped = np.empty_like(clipped, dtype=float)
+        lower = clipped <= 0.5
+        mapped[lower] = 0.5 * np.power(2.0 * clipped[lower], exponent)
+        mapped[~lower] = 1.0 - 0.5 * np.power(2.0 * (1.0 - clipped[~lower]), exponent)
+        return mapped
+
+    def inverse(values):
+        values = np.asarray(values, dtype=float)
+        clipped = np.clip(values, 0.0, 1.0)
+        mapped = np.empty_like(clipped, dtype=float)
+        lower = clipped <= 0.5
+        mapped[lower] = 0.5 * np.power(2.0 * clipped[lower], 1.0 / exponent)
+        mapped[~lower] = 1.0 - 0.5 * np.power(2.0 * (1.0 - clipped[~lower]), 1.0 / exponent)
+        return mapped
+
+    return FuncNorm((forward, inverse), vmin=0.0, vmax=1.0)
+
+
+def _selected_das_projector_diags(seed_payload: dict[str, object]) -> dict[str, np.ndarray]:
+    """Recover the selected DAS projector diagonals from saved rotation weights."""
+    if "das" not in seed_payload.get("best_method_runs", {}):
+        return {}
+
+    records = seed_payload["best_method_runs"]["das"]["comparison"]["method_payloads"]["das"]["results"]
+    projector_by_variable: dict[str, np.ndarray] = {}
+    for record in records:
+        rotations = list(dict(record.get("selected_rotation", {})).get("rotations", []))
+        if not rotations:
+            continue
+        weight = np.asarray(rotations[0].get("weight", []), dtype=float)
+        if weight.ndim != 2 or weight.size == 0:
+            continue
+        subspace_dim = int(record.get("subspace_dim", 0))
+        if subspace_dim <= 0 or subspace_dim > weight.shape[1]:
+            continue
+        projector_diag = np.square(weight[:, :subspace_dim]).sum(axis=1)
+        total = float(projector_diag.sum())
+        if total > 0.0:
+            projector_diag = projector_diag / total
+        projector_by_variable[str(record["variable"])] = projector_diag
+    return projector_by_variable
+
+
+def _plot_heq_handle_summary(seed_payload: dict[str, object], output_path: Path) -> None:
+    """Render the paper-style handle summary and crop left/right panels."""
+    methods = [method for method in HEQ_METHOD_ORDER if method in seed_payload.get("best_method_runs", {})]
+    if not methods:
+        return
+
+    variables = ["WX", "YZ"]
+    layer_labels = ["L1", "L2", "L3"]
+    variable_colors = {"WX": "#4e79a7", "YZ": "#e15759"}
+    layer_mass = {
+        variable: {method: np.zeros(len(layer_labels), dtype=float) for method in methods}
+        for variable in variables
+    }
+    transport_methods = [method for method in methods if method in {"ot", "uot"}]
+    transport_candidate_heatmaps = {
+        method: {variable: np.zeros((3, 16), dtype=float) for variable in variables}
+        for method in transport_methods
+    }
+    transport_topk_heatmaps = {
+        method: {variable: np.zeros((3, 16), dtype=float) for variable in variables}
+        for method in transport_methods
+    }
+    das_canonical_heatmaps = {variable: np.zeros((3, 16), dtype=float) for variable in variables}
+    das_rotated_heatmaps = {variable: np.zeros((3, 16), dtype=float) for variable in variables}
+    das_projector_diags = _selected_das_projector_diags(seed_payload)
+
+    for method in methods:
+        comparison = seed_payload["best_method_runs"][method]["comparison"]
+        method_payload = comparison["method_payloads"][method]
+        method_selection = comparison["method_selections"][method]
+        if method in {"ot", "uot"}:
+            transport_matrix = np.asarray(method_payload["transport"], dtype=float)
+            target_vars = [str(variable) for variable in method_payload["target_vars"]]
+            site_labels = [str(label) for label in method_payload["sites"]]
+            for target_idx, variable in enumerate(target_vars):
+                candidate_values = transport_matrix[target_idx]
+                total_mass = float(candidate_values.sum())
+                for site_idx, site_label in enumerate(site_labels):
+                    layer_idx = int(site_label[1])
+                    dim_idx = int(site_label.split("-d", 1)[1])
+                    if 0 <= layer_idx < 3 and 0 <= dim_idx < 16:
+                        value = float(candidate_values[site_idx])
+                        transport_candidate_heatmaps[method][variable][layer_idx, dim_idx] = value
+                        if total_mass > 0.0:
+                            layer_mass[variable][method][layer_idx] += value / total_mass
+        for record in method_selection["results"]:
+            variable = str(record["variable"])
+            if method == "das":
+                layer_index = int(record["layer"])
+                layer_mass[variable][method][layer_index] = 1.0
+                projector_diag = np.asarray(das_projector_diags.get(variable, np.zeros(16, dtype=float)), dtype=float)
+                width = min(projector_diag.shape[0], das_canonical_heatmaps[variable].shape[1])
+                das_canonical_heatmaps[variable][layer_index, :width] = projector_diag[:width]
+                das_rotated_heatmaps[variable][layer_index, : int(record["subspace_dim"])] = 1.0
+            else:
+                for layer_name, mask_values in method_payload["layer_masks_by_variable"][variable].items():
+                    layer_idx = int(layer_name[1:])
+                    transport_topk_heatmaps[method][variable][layer_idx, :] = np.asarray(mask_values, dtype=float)
+
+    fig = plt.figure(figsize=(18.3, 3.35), constrained_layout=True)
+    outer = fig.add_gridspec(1, 2, width_ratios=[1.12, 3.58], wspace=0.22)
+    left_grid = outer[0, 0].subgridspec(3, 1, height_ratios=[0.079, 0.92, 0.001], hspace=0.0)
+    ax = fig.add_subplot(left_grid[1, 0])
+    right_outer = outer[0, 1].subgridspec(
+        len(methods) + 1,
+        5,
+        height_ratios=[0.11] + [1.0] * len(methods),
+        width_ratios=[3.55, 0.21, 3.55, 0.08, 0.11],
+        wspace=0.006,
+        hspace=0.0,
+    )
+
+    ordered_pairs = [(method, variable) for method in methods for variable in variables]
+    x = np.arange(len(ordered_pairs))
+    layer_bar_width = 0.18
+    min_visible_bar_height = 0.006
+    layer_offsets = np.array([-layer_bar_width, 0.0, layer_bar_width], dtype=float)
+    for layer_idx in range(len(layer_labels)):
+        heights = np.array(
+            [layer_mass[variable][method][layer_idx] for method, variable in ordered_pairs],
+            dtype=float,
+        )
+        display_heights = np.where(heights > 0.0, heights, min_visible_bar_height)
+        facecolors = [variable_colors[variable] for _, variable in ordered_pairs]
+        ax.bar(
+            x + layer_offsets[layer_idx],
+            display_heights,
+            width=layer_bar_width,
+            color=facecolors,
+            alpha=0.35 + 0.28 * layer_idx,
+            edgecolor=facecolors,
+            linewidth=0.7,
+        )
+    ax.set_xticks(
+        x,
+        [rf"{HEQ_METHOD_LABELS[method]}" + "\n" + rf"$z_{{{variable}}}$" for method, variable in ordered_pairs],
+    )
+    ax.set_ylim(0.0, 1.03)
+    ax.set_ylabel("Normalized layer mass")
+    ax.set_title("Layer weight distribution pre-calibration")
+    ax.grid(True, axis="y", alpha=0.2)
+    for boundary in [index + 1.5 for index in range(len(methods) - 1)]:
+        ax.axvline(boundary, color="#999999", linewidth=0.8, alpha=0.5)
+
+    label_x_offsets_by_pair = {
+        0: np.array([-0.62 * layer_bar_width, 0.0, 0.5 * layer_bar_width], dtype=float),
+        1: np.array([-0.72 * layer_bar_width, -0.22 * layer_bar_width, 0.0], dtype=float),
+    }
+    label_gap = 0.024
+    for pair_idx in range(min(2, len(ordered_pairs))):
+        group_color = variable_colors[ordered_pairs[pair_idx][1]]
+        label_x_offsets = label_x_offsets_by_pair[pair_idx]
+        for layer_idx, layer_text in enumerate(layer_labels):
+            base_height = float(layer_mass[ordered_pairs[pair_idx][1]][ordered_pairs[pair_idx][0]][layer_idx])
+            ax.text(
+                x[pair_idx] + layer_offsets[layer_idx] + label_x_offsets[layer_idx],
+                base_height + label_gap,
+                layer_text,
+                color=group_color,
+                fontsize=8.5,
+                ha="center",
+                va="bottom",
+                fontweight="bold",
+            )
+
+    cmap = plt.get_cmap("viridis")
+    norm = _make_tail_detail_norm()
+    for variable, grid_col in zip(variables, [0, 2]):
+        title_ax = fig.add_subplot(right_outer[0, grid_col])
+        title_ax.axis("off")
+        title_ax.text(0.5, 0.76, rf"$z_{{{variable}}}$", ha="center", va="center", fontsize=12)
+
+    image = None
+    variable_blocks = {
+        "WX": right_outer[1:, 0].subgridspec(len(methods), 2, wspace=0.01, hspace=0.0),
+        "YZ": right_outer[1:, 2].subgridspec(len(methods), 2, wspace=0.01, hspace=0.0),
+    }
+    for row_idx, method in enumerate(methods):
+        for variable in variables:
+            pair_grid = variable_blocks[variable]
+            first_ax = fig.add_subplot(pair_grid[row_idx, 0])
+            second_ax = fig.add_subplot(pair_grid[row_idx, 1], sharey=first_ax)
+            if method in {"ot", "uot"}:
+                first_values = np.asarray(transport_candidate_heatmaps[method][variable], dtype=float)
+                second_values = np.asarray(transport_topk_heatmaps[method][variable], dtype=float)
+                first_title = "pre-top$K$"
+                second_title = "top-$K$"
+            else:
+                first_values = np.asarray(das_canonical_heatmaps[variable], dtype=float)
+                second_values = np.asarray(das_rotated_heatmaps[variable], dtype=float)
+                first_title = "canonical"
+                second_title = "rotated"
+
+            def rescale_panel(values: np.ndarray) -> np.ndarray:
+                values = np.asarray(values, dtype=float)
+                vmax = float(values.max())
+                vmin = float(values.min())
+                if vmax <= 0.0:
+                    return values
+                if vmax > vmin:
+                    return (values - vmin) / (vmax - vmin)
+                return values / vmax
+
+            first_values = rescale_panel(first_values)
+            second_values = rescale_panel(second_values)
+            box_aspect = first_values.shape[0] / first_values.shape[1]
+            first_ax.set_box_aspect(box_aspect)
+            second_ax.set_box_aspect(box_aspect)
+            image = first_ax.imshow(first_values, cmap=cmap, norm=norm, aspect="auto", interpolation="nearest")
+            second_ax.imshow(second_values, cmap=cmap, norm=norm, aspect="auto", interpolation="nearest")
+
+            for heat_ax in (first_ax, second_ax):
+                heat_ax.set_xticks(np.arange(-0.5, 16, 1), minor=True)
+                heat_ax.set_yticks(np.arange(-0.5, 3, 1), minor=True)
+                heat_ax.grid(which="minor", color="white", linewidth=0.32)
+                heat_ax.tick_params(which="minor", bottom=False, left=False)
+                for spine in heat_ax.spines.values():
+                    spine.set_linewidth(0.9)
+                    spine.set_edgecolor("#333333")
+
+            if variable == "WX":
+                first_ax.set_yticks([0, 1, 2], layer_labels)
+                first_ax.set_ylabel(HEQ_METHOD_LABELS[method], rotation=0, labelpad=12, va="center", fontsize=11)
+            else:
+                first_ax.set_yticks([0, 1, 2], [])
+            second_ax.set_yticks([0, 1, 2], [])
+
+            if row_idx == len(methods) - 1:
+                first_ax.set_xticks([0, 5, 10, 15], ["0", "5", "10", "15"])
+                second_ax.set_xticks([0, 5, 10, 15], ["0", "5", "10", "15"])
+                first_ax.set_xlabel("Neuron index")
+            else:
+                first_ax.set_xticks([0, 5, 10, 15], [])
+                second_ax.set_xticks([0, 5, 10, 15], [])
+
+            first_ax.set_title(first_title, fontsize=8.5, pad=2.0, color="#444444")
+            second_ax.set_title(second_title, fontsize=8.5, pad=2.0, color="#444444")
+
+    if image is not None:
+        cax = fig.add_subplot(right_outer[1:, 4])
+        tick_values = [0.0, 0.05, 0.15, 0.5, 0.85, 0.95, 1.0]
+        cbar = fig.colorbar(image, cax=cax, ticks=tick_values)
+        cbar.ax.set_yticklabels([f"{tick:.2f}".rstrip("0").rstrip(".") for tick in tick_values])
+        cbar.ax.tick_params(labelsize=8.5)
+        cbar.set_label("Relative site strength", rotation=90)
+
+    ensure_parent_dir(output_path)
+    fig.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+    image_file = Image.open(output_path)
+    width, height = image_file.size
+    left_end = int(round(0.229 * width))
+    right_start = int(round(0.244 * width))
+    image_file.crop((0, 0, left_end, height)).save(output_path.with_name("heq_handle_summary_left.png"))
+    image_file.crop((right_start, 0, width, height)).save(output_path.with_name("heq_handle_summary_right.png"))
+
+
+def _save_heq_seed_plots(seed_payload: dict[str, object], seed_run_dir: Path) -> dict[str, str]:
+    """Generate the HEQ summary plots emitted at the end of one seed run."""
+    plot_paths: dict[str, str] = {}
+
+    accuracy_path = seed_run_dir / "heq_joint_accuracy.png"
+    _plot_heq_joint_accuracy(seed_payload, accuracy_path)
+    if accuracy_path.exists():
+        plot_paths["heq_joint_accuracy"] = str(accuracy_path)
+
+    runtime_path = seed_run_dir / "heq_joint_runtime.png"
+    _plot_heq_joint_runtime(seed_payload, runtime_path)
+    if runtime_path.exists():
+        plot_paths["heq_joint_runtime"] = str(runtime_path)
+
+    handle_summary_path = seed_run_dir / "heq_handle_summary.png"
+    _plot_heq_handle_summary(seed_payload, handle_summary_path)
+    if handle_summary_path.exists():
+        plot_paths["heq_handle_summary"] = str(handle_summary_path)
+    for key in ("heq_handle_summary_left", "heq_handle_summary_right"):
+        path = seed_run_dir / f"{key}.png"
+        if path.exists():
+            plot_paths[key] = str(path)
+
+    return plot_paths
+
+
 def _build_aggregate_seed_summary(seed_payloads: list[dict[str, object]]) -> tuple[dict[str, object], str]:
     """Aggregate best-per-method exact accuracies across seeds."""
     method_to_seed_rows: dict[str, list[dict[str, object]]] = {}
@@ -1175,6 +1590,7 @@ def _run_single_seed(seed: int) -> dict[str, object]:
         section_lines.extend(["", format_method_selection_summary(method_selection)])
         best_method_sections.append("\n".join(section_lines))
 
+    payload["heq_plots"] = _save_heq_seed_plots(payload, seed_run_dir)
     write_json(output_path, payload)
     write_text_report(
         summary_path,
