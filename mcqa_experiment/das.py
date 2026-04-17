@@ -51,7 +51,7 @@ def train_das_candidate(
     optimizer = torch.optim.Adam(intervention.parameters(), lr=float(learning_rate))
     loader = DataLoader(MCQAPairDataset(bank), batch_size=batch_size, shuffle=True)
     losses: list[float] = []
-    best_loss = None
+    previous_loss = None
     plateau_steps = 0
     for epoch_index in range(int(max_epochs)):
         epoch_losses = []
@@ -111,11 +111,11 @@ def train_das_candidate(
                 f"variable={bank.target_var} site={site.label} dim={int(subspace_dim)} "
                 f"loss={float(epoch_loss):.6f}"
             )
-        if best_loss is None or epoch_loss < float(best_loss) * (1.0 - float(plateau_rel_delta)):
-            best_loss = epoch_loss
+        if previous_loss is None or epoch_loss < float(previous_loss) * (1.0 - float(plateau_rel_delta)):
             plateau_steps = 0
         else:
             plateau_steps += 1
+        previous_loss = epoch_loss
         if epoch_index + 1 >= int(min_epochs) and plateau_steps >= int(plateau_patience):
             break
     return intervention, losses
