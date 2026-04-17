@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+import gc
 import hashlib
 import json
 from pathlib import Path
 import os
 
 from huggingface_hub import login as hf_login
+import torch
 
 from mcqa_experiment.compare_runner import CompareExperimentConfig, run_comparison
 from mcqa_experiment.data import build_pair_banks, load_filtered_mcqa_pipeline
@@ -120,6 +122,34 @@ def ensure_hf_login(token: str | None, prompt_login: bool) -> str | None:
     return token
 
 
+def _is_memory_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return isinstance(exc, torch.OutOfMemoryError) or any(
+        needle in message
+        for needle in (
+            "out of memory",
+            "cuda out of memory",
+            "mps backend out of memory",
+            "cublas_status_alloc_failed",
+            "cuda error: out of memory",
+            "hip out of memory",
+        )
+    )
+
+
+def _clear_torch_memory() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
+    if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+        try:
+            torch.mps.empty_cache()
+        except Exception:
+            pass
+
+
 def main() -> None:
     device = resolve_device(DEVICE)
     hf_token = ensure_hf_login(HF_TOKEN, PROMPT_HF_LOGIN)
@@ -169,144 +199,158 @@ def main() -> None:
         for signature_mode in SIGNATURE_MODES:
             for resolution in RESOLUTIONS:
                 prepared_ot_artifacts = None
-                if method in {"ot", "uot"} and TARGET_VARS:
-                    ot_sites = enumerate_residual_sites(
-                        num_layers=int(model.config.num_hidden_layers),
-                        hidden_size=int(model.config.hidden_size),
-                        token_position_ids=token_position_ids,
-                        resolution=int(resolution),
-                        layers=tuple(selected_layers),
-                        selected_token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
-                    )
-                    train_bank = banks_by_split["train"][TARGET_VARS[0]]
-                    cache_spec = _signature_cache_spec(
-                        train_bank=train_bank,
-                        resolution=int(resolution),
-                        signature_mode=signature_mode,
-                        selected_layers=selected_layers,
-                        token_position_ids=token_position_ids,
-                    )
-                    cache_path = _signature_cache_path(
-                        resolution=int(resolution),
-                        signature_mode=signature_mode,
-                        cache_spec=cache_spec,
-                    )
-                    prepared_ot_artifacts = load_prepared_alignment_artifacts(
-                        cache_path,
-                        expected_spec=cache_spec,
-                    )
-                    if prepared_ot_artifacts is not None:
-                        print(
-                            f"[signatures] loaded cache path={cache_path} "
-                            f"prepare_time={float(prepared_ot_artifacts.get('prepare_runtime_seconds', 0.0)):.2f}s"
-                        )
-                    else:
-                        prepared_ot_artifacts = prepare_alignment_artifacts(
-                            model=model,
-                            fit_bank=train_bank,
-                            sites=ot_sites,
-                            device=device,
-                            config=OTConfig(
-                                method=method,
-                                batch_size=BATCH_SIZE,
-                                epsilon=1.0,
-                                signature_mode=signature_mode,
-                                top_k_values=tuple(OT_TOP_K_VALUES),
-                                lambda_values=tuple(OT_LAMBDAS),
-                            ),
-                        )
-                        prepared_ot_artifacts["cache_spec"] = cache_spec
-                        prepared_ot_artifacts["cache_path"] = str(cache_path)
-                        save_prepared_alignment_artifacts(
-                            cache_path,
-                            prepared_artifacts=prepared_ot_artifacts,
-                            cache_spec=cache_spec,
-                        )
-                        print(
-                            f"[signatures] saved cache path={cache_path} "
-                            f"prepare_time={float(prepared_ot_artifacts.get('prepare_runtime_seconds', 0.0)):.2f}s"
-                        )
-                epsilon_values = OT_EPSILONS if method in {"ot", "uot"} else [None]
-                for epsilon in epsilon_values:
-                    if method == "uot":
-                        for beta_abstract in UOT_BETA_ABSTRACTS:
-                            for beta_neural in UOT_BETA_NEURALS:
-                                uot_config = CompareExperimentConfig(
-                                    model_name=MODEL_NAME,
-                                    output_path=RUN_DIR / (
-                                        f"mcqa_uot_res-{int(resolution)}_sig-{signature_mode}_eps-{float(epsilon):g}_"
-                                        f"ba-{beta_abstract:g}_bn-{beta_neural:g}.json"
-                                    ),
-                                    summary_path=RUN_DIR / (
-                                        f"mcqa_uot_res-{int(resolution)}_sig-{signature_mode}_eps-{float(epsilon):g}_"
-                                        f"ba-{beta_abstract:g}_bn-{beta_neural:g}.txt"
-                                    ),
-                                    methods=("uot",),
-                                    target_vars=tuple(TARGET_VARS),
-                                    batch_size=BATCH_SIZE,
-                                    ot_epsilon=float(epsilon),
-                                    uot_beta_abstract=float(beta_abstract),
-                                    uot_beta_neural=float(beta_neural),
-                                    signature_mode=signature_mode,
-                                    ot_top_k_values=tuple(OT_TOP_K_VALUES),
-                                    ot_lambdas=tuple(OT_LAMBDAS),
-                                    resolution=int(resolution),
-                                    layers=tuple(selected_layers),
-                                    token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
-                                )
-                                all_payloads.append(
-                                    run_comparison(
-                                        model=model,
-                                        tokenizer=tokenizer,
-                                        token_positions=token_positions,
-                                        banks_by_split=banks_by_split,
-                                        data_metadata=data_metadata,
-                                        device=device,
-                                        config=uot_config,
-                                        prepared_ot_artifacts=prepared_ot_artifacts,
-                                    )
-                                )
-                    else:
-                        output_stem = (
-                            f"mcqa_{method}_res-{int(resolution)}_sig-{signature_mode}"
-                            if method != "ot"
-                            else f"mcqa_res-{int(resolution)}_sig-{signature_mode}"
-                        )
-                        if epsilon is not None:
-                            output_stem = f"{output_stem}_eps-{float(epsilon):g}"
-                        config = CompareExperimentConfig(
-                            model_name=MODEL_NAME,
-                            output_path=RUN_DIR / f"{output_stem}.json",
-                            summary_path=RUN_DIR / f"{output_stem}.txt",
-                            methods=(method,),
-                            target_vars=tuple(TARGET_VARS),
-                            batch_size=BATCH_SIZE,
-                            ot_epsilon=float(epsilon) if epsilon is not None else 1.0,
-                            signature_mode=signature_mode,
-                            ot_top_k_values=tuple(OT_TOP_K_VALUES),
-                            ot_lambdas=tuple(OT_LAMBDAS),
-                            das_max_epochs=DAS_MAX_EPOCHS,
-                            das_min_epochs=DAS_MIN_EPOCHS,
-                            das_plateau_patience=DAS_PLATEAU_PATIENCE,
-                            das_plateau_rel_delta=DAS_PLATEAU_REL_DELTA,
-                            das_learning_rate=DAS_LEARNING_RATE,
-                            das_subspace_dims=tuple(DAS_SUBSPACE_DIMS),
+                try:
+                    if method in {"ot", "uot"} and TARGET_VARS:
+                        ot_sites = enumerate_residual_sites(
+                            num_layers=int(model.config.num_hidden_layers),
+                            hidden_size=int(model.config.hidden_size),
+                            token_position_ids=token_position_ids,
                             resolution=int(resolution),
                             layers=tuple(selected_layers),
-                            token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
+                            selected_token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
                         )
-                        all_payloads.append(
-                            run_comparison(
-                                model=model,
-                                tokenizer=tokenizer,
-                                token_positions=token_positions,
-                                banks_by_split=banks_by_split,
-                                data_metadata=data_metadata,
-                                device=device,
-                                config=config,
-                                prepared_ot_artifacts=prepared_ot_artifacts,
+                        train_bank = banks_by_split["train"][TARGET_VARS[0]]
+                        cache_spec = _signature_cache_spec(
+                            train_bank=train_bank,
+                            resolution=int(resolution),
+                            signature_mode=signature_mode,
+                            selected_layers=selected_layers,
+                            token_position_ids=token_position_ids,
+                        )
+                        cache_path = _signature_cache_path(
+                            resolution=int(resolution),
+                            signature_mode=signature_mode,
+                            cache_spec=cache_spec,
+                        )
+                        prepared_ot_artifacts = load_prepared_alignment_artifacts(
+                            cache_path,
+                            expected_spec=cache_spec,
+                        )
+                        if prepared_ot_artifacts is not None:
+                            print(
+                                f"[signatures] loaded cache path={cache_path} "
+                                f"prepare_time={float(prepared_ot_artifacts.get('prepare_runtime_seconds', 0.0)):.2f}s"
                             )
-                        )
+                        else:
+                            prepared_ot_artifacts = prepare_alignment_artifacts(
+                                model=model,
+                                fit_bank=train_bank,
+                                sites=ot_sites,
+                                device=device,
+                                config=OTConfig(
+                                    method=method,
+                                    batch_size=BATCH_SIZE,
+                                    epsilon=1.0,
+                                    signature_mode=signature_mode,
+                                    top_k_values=tuple(OT_TOP_K_VALUES),
+                                    lambda_values=tuple(OT_LAMBDAS),
+                                ),
+                            )
+                            prepared_ot_artifacts["cache_spec"] = cache_spec
+                            prepared_ot_artifacts["cache_path"] = str(cache_path)
+                            save_prepared_alignment_artifacts(
+                                cache_path,
+                                prepared_artifacts=prepared_ot_artifacts,
+                                cache_spec=cache_spec,
+                            )
+                            print(
+                                f"[signatures] saved cache path={cache_path} "
+                                f"prepare_time={float(prepared_ot_artifacts.get('prepare_runtime_seconds', 0.0)):.2f}s"
+                            )
+                    epsilon_values = OT_EPSILONS if method in {"ot", "uot"} else [None]
+                    for epsilon in epsilon_values:
+                        if method == "uot":
+                            for beta_abstract in UOT_BETA_ABSTRACTS:
+                                for beta_neural in UOT_BETA_NEURALS:
+                                    uot_config = CompareExperimentConfig(
+                                        model_name=MODEL_NAME,
+                                        output_path=RUN_DIR / (
+                                            f"mcqa_uot_res-{int(resolution)}_sig-{signature_mode}_eps-{float(epsilon):g}_"
+                                            f"ba-{beta_abstract:g}_bn-{beta_neural:g}.json"
+                                        ),
+                                        summary_path=RUN_DIR / (
+                                            f"mcqa_uot_res-{int(resolution)}_sig-{signature_mode}_eps-{float(epsilon):g}_"
+                                            f"ba-{beta_abstract:g}_bn-{beta_neural:g}.txt"
+                                        ),
+                                        methods=("uot",),
+                                        target_vars=tuple(TARGET_VARS),
+                                        batch_size=BATCH_SIZE,
+                                        ot_epsilon=float(epsilon),
+                                        uot_beta_abstract=float(beta_abstract),
+                                        uot_beta_neural=float(beta_neural),
+                                        signature_mode=signature_mode,
+                                        ot_top_k_values=tuple(OT_TOP_K_VALUES),
+                                        ot_lambdas=tuple(OT_LAMBDAS),
+                                        resolution=int(resolution),
+                                        layers=tuple(selected_layers),
+                                        token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
+                                    )
+                                    all_payloads.append(
+                                        run_comparison(
+                                            model=model,
+                                            tokenizer=tokenizer,
+                                            token_positions=token_positions,
+                                            banks_by_split=banks_by_split,
+                                            data_metadata=data_metadata,
+                                            device=device,
+                                            config=uot_config,
+                                            prepared_ot_artifacts=prepared_ot_artifacts,
+                                        )
+                                    )
+                        else:
+                            output_stem = (
+                                f"mcqa_{method}_res-{int(resolution)}_sig-{signature_mode}"
+                                if method != "ot"
+                                else f"mcqa_res-{int(resolution)}_sig-{signature_mode}"
+                            )
+                            if epsilon is not None:
+                                output_stem = f"{output_stem}_eps-{float(epsilon):g}"
+                            config = CompareExperimentConfig(
+                                model_name=MODEL_NAME,
+                                output_path=RUN_DIR / f"{output_stem}.json",
+                                summary_path=RUN_DIR / f"{output_stem}.txt",
+                                methods=(method,),
+                                target_vars=tuple(TARGET_VARS),
+                                batch_size=BATCH_SIZE,
+                                ot_epsilon=float(epsilon) if epsilon is not None else 1.0,
+                                signature_mode=signature_mode,
+                                ot_top_k_values=tuple(OT_TOP_K_VALUES),
+                                ot_lambdas=tuple(OT_LAMBDAS),
+                                das_max_epochs=DAS_MAX_EPOCHS,
+                                das_min_epochs=DAS_MIN_EPOCHS,
+                                das_plateau_patience=DAS_PLATEAU_PATIENCE,
+                                das_plateau_rel_delta=DAS_PLATEAU_REL_DELTA,
+                                das_learning_rate=DAS_LEARNING_RATE,
+                                das_subspace_dims=tuple(DAS_SUBSPACE_DIMS),
+                                resolution=int(resolution),
+                                layers=tuple(selected_layers),
+                                token_position_ids=None if TOKEN_POSITION_IDS is None else tuple(TOKEN_POSITION_IDS),
+                            )
+                            all_payloads.append(
+                                run_comparison(
+                                    model=model,
+                                    tokenizer=tokenizer,
+                                    token_positions=token_positions,
+                                    banks_by_split=banks_by_split,
+                                    data_metadata=data_metadata,
+                                    device=device,
+                                    config=config,
+                                    prepared_ot_artifacts=prepared_ot_artifacts,
+                                )
+                            )
+                except Exception as exc:
+                    if not _is_memory_error(exc):
+                        raise
+                    print(
+                        f"[oom] skipping method={method} signature_mode={signature_mode} resolution={int(resolution)} "
+                        f"after memory failure: {exc}"
+                    )
+                    prepared_ot_artifacts = None
+                    _clear_torch_memory()
+                    continue
+                finally:
+                    prepared_ot_artifacts = None
+                    _clear_torch_memory()
     from mcqa_experiment.runtime import write_json
 
     write_json(OUTPUT_PATH, {"runs": all_payloads})
