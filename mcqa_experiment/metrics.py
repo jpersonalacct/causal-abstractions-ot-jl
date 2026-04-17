@@ -32,6 +32,11 @@ def cross_entropy_for_bank(logits: torch.Tensor, bank: MCQAPairBank) -> torch.Te
     return F.cross_entropy(target_logits, bank.labels.to(target_logits.device))
 
 
+def cross_entropy_for_das(logits: torch.Tensor, bank: MCQAPairBank) -> torch.Tensor:
+    """Compute DAS training loss on full next-token logits."""
+    return F.cross_entropy(logits, bank.answer_token_ids.to(logits.device))
+
+
 def metrics_from_logits(logits: torch.Tensor, bank: MCQAPairBank, tokenizer=None) -> dict[str, float]:
     """Compute exact accuracy and optional decoded answer accuracy."""
     target_logits = gather_variable_logits(logits, bank)
@@ -45,6 +50,24 @@ def metrics_from_logits(logits: torch.Tensor, bank: MCQAPairBank, tokenizer=None
             index=predictions.view(-1, 1),
         ).view(-1)
         decoded_predictions = [tokenizer.decode([int(token_id)]) for token_id in token_predictions.detach().cpu().tolist()]
+        decoded_acc = 0.0
+        if decoded_predictions:
+            decoded_acc = sum(
+                int(str(expected).strip() == str(decoded).strip())
+                for expected, decoded in zip(bank.expected_answer_texts, decoded_predictions)
+            ) / len(decoded_predictions)
+        metrics["decoded_answer_acc"] = float(decoded_acc)
+    return metrics
+
+
+def das_metrics_from_logits(logits: torch.Tensor, bank: MCQAPairBank, tokenizer=None) -> dict[str, float]:
+    """Compute DAS metrics directly on full-vocab next-token predictions."""
+    predictions = logits.argmax(dim=-1)
+    labels = bank.answer_token_ids.to(predictions.device)
+    exact_acc = float((predictions == labels).float().mean().item())
+    metrics = {"exact_acc": exact_acc}
+    if tokenizer is not None:
+        decoded_predictions = [tokenizer.decode([int(token_id)]) for token_id in predictions.detach().cpu().tolist()]
         decoded_acc = 0.0
         if decoded_predictions:
             decoded_acc = sum(
@@ -79,6 +102,26 @@ def prediction_details_from_logits(logits: torch.Tensor, bank: MCQAPairBank, tok
     if tokenizer is not None:
         details["predicted_text"] = [
             tokenizer.decode([int(token_id)]) for token_id in predicted_token_ids.detach().cpu().tolist()
+        ]
+    return details
+
+
+def das_prediction_details_from_logits(logits: torch.Tensor, bank: MCQAPairBank, tokenizer=None) -> dict[str, object]:
+    """Return parse-friendly DAS prediction details from full-vocab logits."""
+    predictions = logits.argmax(dim=-1)
+    labels = bank.answer_token_ids.to(predictions.device)
+    details: dict[str, object] = {
+        "labels": labels.detach().cpu().tolist(),
+        "predictions": predictions.detach().cpu().tolist(),
+        "correct": (predictions == labels).detach().cpu().to(torch.int64).tolist(),
+        "base_raw_inputs": [str(item["raw_input"]) for item in bank.base_inputs],
+        "source_raw_inputs": [str(item["raw_input"]) for item in bank.source_inputs],
+        "expected_answer_texts": list(bank.expected_answer_texts),
+        "target_token_ids": bank.answer_token_ids.detach().cpu().tolist(),
+    }
+    if tokenizer is not None:
+        details["predicted_text"] = [
+            tokenizer.decode([int(token_id)]) for token_id in predictions.detach().cpu().tolist()
         ]
     return details
 

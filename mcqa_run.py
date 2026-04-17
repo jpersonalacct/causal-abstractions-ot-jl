@@ -50,18 +50,18 @@ METHODS = ["ot"]
 TARGET_VARS = ["answer_pointer", "answer"]
 COUNTERFACTUAL_NAMES = ["answerPosition", "randomLetter", "answerPosition_randomLetter"]
 
-LAYERS = "auto"
+LAYERS = [25] #"auto"
 TOKEN_POSITION_IDS = ["last_token"] # "correct_symbol", "correct_symbol_period", 
 
 BATCH_SIZE = 64 
 
-RESOLUTIONS = [64] # gemma-2-2b has 2304 hidden layer size
-OT_EPSILONS = [2**k for k in range(-5, 4)]
+RESOLUTIONS = [1] # gemma-2-2b has 2304 hidden layer size
+OT_EPSILONS = [20, 30, 40, 50]
 UOT_BETA_ABSTRACTS = [0.1, 1.0]
 UOT_BETA_NEURALS = [0.1, 1.0]
-SIGNATURE_MODES = ["whole_vocab_kl_t1", "answer_logit_delta"]
+SIGNATURE_MODES = ["answer_logit_delta"] # "whole_vocab_kl_t1", 
 OT_TOP_K_VALUES = list(range(1, 11))
-OT_LAMBDAS = [round(value * 0.1, 1) for value in range(1, 31)]
+OT_LAMBDAS = [i for i in range(1, 31)]
 
 DAS_MAX_EPOCHS = 1000
 DAS_MIN_EPOCHS = 5

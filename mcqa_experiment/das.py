@@ -9,7 +9,11 @@ from torch.utils.data import DataLoader
 
 from .data import MCQAPairBank, MCQAPairDataset
 from .intervention import DASSubspaceIntervention, run_das_residual_intervention
-from .metrics import cross_entropy_for_bank, metrics_from_logits, prediction_details_from_logits
+from .metrics import (
+    cross_entropy_for_das,
+    das_metrics_from_logits,
+    das_prediction_details_from_logits,
+)
 from .sites import ResidualSite
 
 
@@ -86,13 +90,15 @@ def train_das_candidate(
                 symbol_variant_token_ids=batch["symbol_variant_token_ids"],
                 source_symbol_token_ids=batch["source_symbol_token_ids"],
                 source_symbol_variant_token_ids=batch["source_symbol_variant_token_ids"],
+                alphabet_token_ids=batch["alphabet_token_ids"],
+                alphabet_variant_token_ids=batch["alphabet_variant_token_ids"],
                 canonical_answer_token_ids=bank.canonical_answer_token_ids,
                 answer_token_ids=batch["answer_token_id"].view(-1),
                 base_answer_token_ids=batch["base_answer_token_id"].view(-1),
                 changed_mask=torch.ones_like(batch["labels"], dtype=torch.bool),
                 expected_answer_texts=batch["expected_answer_text"],
             )
-            loss = cross_entropy_for_bank(logits, mini_bank)
+            loss = cross_entropy_for_das(logits, mini_bank)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -136,9 +142,9 @@ def evaluate_das_candidate(
         )
         logits_all.append(logits.detach().cpu())
     full_logits = torch.cat(logits_all, dim=0)
-    metrics = metrics_from_logits(full_logits, bank, tokenizer=tokenizer)
+    metrics = das_metrics_from_logits(full_logits, bank, tokenizer=tokenizer)
     if return_details:
-        metrics["prediction_details"] = prediction_details_from_logits(full_logits, bank, tokenizer=tokenizer)
+        metrics["prediction_details"] = das_prediction_details_from_logits(full_logits, bank, tokenizer=tokenizer)
     return metrics
 
 
