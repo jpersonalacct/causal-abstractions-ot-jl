@@ -105,6 +105,12 @@ def train_das_candidate(
             epoch_losses.append(float(loss.detach().cpu()))
         epoch_loss = sum(epoch_losses) / max(len(epoch_losses), 1)
         losses.append(epoch_loss)
+        if verbose:
+            print(
+                f"[DAS] epoch {epoch_index + 1}/{int(max_epochs)} "
+                f"variable={bank.target_var} site={site.label} dim={int(subspace_dim)} "
+                f"loss={float(epoch_loss):.6f}"
+            )
         if best_loss is None or epoch_loss < float(best_loss) * (1.0 - float(plateau_rel_delta)):
             best_loss = epoch_loss
             plateau_steps = 0
