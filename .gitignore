@@ -10,6 +10,7 @@ results/
 synthetic_datasets/
 .DS_Store
 MIB/
+.venv/
 
 # LaTeX build artifacts
 paper/*.aux
