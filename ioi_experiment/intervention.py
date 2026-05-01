@@ -62,6 +62,71 @@ def forward_factual_logits(
     return gather_last_token_logits(outputs.logits, attention_mask)
 
 
+def run_soft_residual_intervention(
+    *,
+    model,
+    base_input_ids: torch.Tensor,
+    base_attention_mask: torch.Tensor,
+    source_input_ids: torch.Tensor,
+    source_attention_mask: torch.Tensor,
+    site_weights: dict,
+    strength: float,
+    base_position_by_id: dict[str, torch.Tensor],
+    source_position_by_id: dict[str, torch.Tensor],
+) -> torch.Tensor:
+    """Apply a weighted residual interpolation across the selected sites."""
+    if not site_weights:
+        return forward_factual_logits(model=model, input_ids=base_input_ids, attention_mask=base_attention_mask)
+
+    layers = resolve_transformer_layers(model)
+    target_layers = tuple(sorted({site.layer for site in site_weights}))
+    source_hidden_by_layer = _collect_source_hidden_states(
+        model=model,
+        source_input_ids=source_input_ids,
+        source_attention_mask=source_attention_mask,
+        target_layers=target_layers,
+    )
+    handles = []
+
+    def make_hook(layer_index: int):
+        layer_sites = [(site, float(weight)) for site, weight in site_weights.items() if int(site.layer) == int(layer_index)]
+
+        def hook(_module, _inputs, output):
+            hidden = output[0] if isinstance(output, tuple) else output
+            hidden = hidden.clone()
+            batch_size = hidden.shape[0]
+            batch_indices = torch.arange(batch_size, device=hidden.device)
+            source_hidden = source_hidden_by_layer[int(layer_index)].to(hidden.device)
+            for site, weight in layer_sites:
+                base_positions = base_position_by_id[site.token_position_id].to(hidden.device)
+                source_positions = source_position_by_id[site.token_position_id].to(hidden.device)
+                base_vectors = hidden[batch_indices, base_positions]
+                source_vectors = source_hidden[batch_indices, source_positions]
+                delta = float(strength) * float(weight) * (source_vectors - base_vectors)
+                hidden[batch_indices, base_positions, int(site.dim_start) : int(site.dim_end)] = (
+                    base_vectors[:, int(site.dim_start) : int(site.dim_end)]
+                    + delta[:, int(site.dim_start) : int(site.dim_end)]
+                )
+            if isinstance(output, tuple):
+                return (hidden, *output[1:])
+            return hidden
+
+        return hook
+
+    for layer_index in target_layers:
+        handles.append(layers[int(layer_index)].register_forward_hook(make_hook(int(layer_index))))
+    try:
+        outputs = model(
+            input_ids=base_input_ids,
+            attention_mask=base_attention_mask,
+            use_cache=False,
+        )
+    finally:
+        for handle in handles:
+            handle.remove()
+    return gather_last_token_logits(outputs.logits, base_attention_mask)
+
+
 class DASSubspaceIntervention(nn.Module):
     """Low-rank rotated-space swap on one residual vector."""
 
